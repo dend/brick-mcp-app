@@ -88,38 +88,63 @@ function BrickApp() {
     }).catch(() => {});
   }, [app, sceneData]);
 
-  // Poll for scene changes (picks up model-initiated mutations)
+  // Poll for scene changes (picks up model-initiated mutations).
+  // Uses adaptive timing: re-polls quickly when changes are detected (live building),
+  // falls back to 1s interval when idle.
   useEffect(() => {
     if (!app) return;
-    const interval = setInterval(async () => {
-      // Skip poll if a direct tool result was processed very recently —
-      // the poll response was likely initiated before that result and could be stale
-      if (Date.now() - lastDirectResultRef.current < 500) return;
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    async function poll() {
+      if (cancelled) return;
+      // Skip poll if a direct tool result was processed very recently
+      if (Date.now() - lastDirectResultRef.current < 500) {
+        timeoutId = setTimeout(poll, 200);
+        return;
+      }
       try {
-        const result = await app.callServerTool({
+        const result = await app!.callServerTool({
           name: 'brick_poll_scene',
           arguments: { knownVersion: knownVersionRef.current },
         });
+        if (cancelled) return;
         const payload = parseScenePayload(result);
-        if (!payload || payload.unchanged) return;
+        if (!payload || payload.unchanged) {
+          // No changes — poll at normal rate
+          timeoutId = setTimeout(poll, 1000);
+          return;
+        }
         // Skip stale poll results
         if (payload.version !== undefined && knownVersionRef.current !== undefined
             && payload.version < knownVersionRef.current) {
+          timeoutId = setTimeout(poll, 1000);
           return;
         }
         // Also skip if a direct result arrived while this poll was in-flight
-        if (Date.now() - lastDirectResultRef.current < 500) return;
+        if (Date.now() - lastDirectResultRef.current < 500) {
+          timeoutId = setTimeout(poll, 200);
+          return;
+        }
         if (payload.version !== undefined) {
           knownVersionRef.current = payload.version;
         }
         if (payload.scene) {
           setSceneData(payload.scene);
         }
+        // Changes detected — re-poll quickly for live building effect
+        timeoutId = setTimeout(poll, 50);
       } catch {
-        // Ignore poll errors (server may be temporarily unavailable)
+        if (cancelled) return;
+        timeoutId = setTimeout(poll, 1000);
       }
-    }, 1000);
-    return () => clearInterval(interval);
+    }
+
+    timeoutId = setTimeout(poll, 1000);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   }, [app]);
 
   if (error) {

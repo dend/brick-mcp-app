@@ -193,10 +193,87 @@ function generateId(): string {
 
 const resourceUri = "ui://brick-builder/mcp-app.html";
 
+// ── Brick catalog cheat sheet (returned by brick_read_me) ───────────────────
+
+function buildCatalogCheatSheet(): string {
+  const byCategory: Record<string, BrickDefinition[]> = {};
+  for (const bt of BRICK_CATALOG) {
+    (byCategory[bt.category] ??= []).push(bt);
+  }
+
+  let sheet = `# Brick Builder Reference
+
+## IMPORTANT: Always call brick_read_me FIRST
+Before building anything, call brick_read_me to learn available brick types.
+Do NOT guess brick type IDs — use only the IDs listed below.
+
+## Available Brick Types
+
+`;
+
+  for (const [cat, bricks] of Object.entries(byCategory)) {
+    sheet += `### ${cat.charAt(0).toUpperCase() + cat.slice(1)}s\n`;
+    sheet += `| ID | Name | Width (X) | Depth (Z) | Height (Y) |\n`;
+    sheet += `|----|------|-----------|-----------|------------|\n`;
+    for (const bt of bricks) {
+      sheet += `| ${bt.id} | ${bt.name} | ${bt.studsX} | ${bt.studsZ} | ${bt.heightUnits} |\n`;
+    }
+    sheet += `\n`;
+  }
+
+  sheet += `## Coordinate System
+- Baseplate: ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs (X and Z axes)
+- Y axis: height in plate units (1 brick height = 3 plate units)
+- Valid X: 0–${BASEPLATE_SIZE - 1}, Z: 0–${BASEPLATE_SIZE - 1}, Y: 0+
+- Rotation: 0, 90, 180, or 270 degrees
+
+## Height Guide
+- 1 plate = 1 height unit (Y)
+- 1 brick = 3 height units (Y)
+- To stack bricks: next brick Y = current Y + current brick's heightUnits
+- Example: brick at Y=0 (height 3) → next brick at Y=3
+
+## Suggested Colors
+- Red: #cc0000
+- Blue: #0055bf
+- Yellow: #f2cd37
+- Green: #237841
+- White: #ffffff
+- Black: #1b2a34
+- Orange: #fe8a18
+- Dark grey: #6b5a5a
+- Light grey: #9ba19d
+- Brown: #583927
+- Tan: #e4cd9e
+- Dark blue: #0a3463
+
+## Building Tips
+- Build bottom-up, layer by layer (low Y first)
+- Use 2×4 and 2×3 bricks for structural walls — they're strong
+- Offset bricks between rows for realistic interlocking pattern
+- Use plates (height 1) for thin layers and detailing
+- Slopes create rooflines and angled surfaces
+- Technic bricks have pin holes for mechanical connections
+- Corner bricks create L-shaped joints
+
+## Tool Usage
+1. Call brick_read_me first (this tool) — you only need to call it once
+2. Call brick_render_scene to open the 3D viewer
+3. Call brick_place to add bricks — you can place 1 or many at a time
+4. The user sees each brick appear live in the 3D view as you place them
+5. Call brick_get_scene to inspect what's currently built
+6. Call brick_clear_scene to start fresh
+`;
+
+  return sheet;
+}
+
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "Brick Builder",
     version: "1.0.0",
+  }, {
+    instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Do not guess brick type IDs.`,
   });
 
   // Per-session scene state
@@ -218,47 +295,65 @@ export function createServer(): McpServer {
     };
   }
 
-  // ── Tool 1: brick_render_scene (model-only) ─────────────────────────────
+  // ── Tool 1: brick_read_me (model-only, no frame) ───────────────────────
+  // Like Excalidraw's read_me — returns comprehensive cheat sheet with
+  // available brick types, coordinate system, colors, and building tips.
+
+  server.tool(
+    "brick_read_me",
+    "Returns the complete brick catalog and building guide. ALWAYS call this first before building anything — it lists all available brick type IDs, dimensions, the coordinate system, color palette, and building tips. You only need to call it once per conversation.",
+    {},
+    async () => ({
+      content: [{ type: "text" as const, text: buildCatalogCheatSheet() }],
+    }),
+  );
+
+  // ── Tool 2: brick_render_scene (model-only, creates frame) ────────────
 
   registerAppTool(
     server,
     "brick_render_scene",
     {
       title: "Render Brick Scene",
-      description: "Opens the 3D brick builder UI and shows the current scene.",
+      description: "Opens the 3D brick builder UI. Call brick_read_me first to learn available bricks, then call this to open the viewer, then use brick_place to add bricks.",
       inputSchema: {},
       _meta: { ui: { resourceUri } },
     },
     async () => sceneResult("Scene rendered"),
   );
 
-  // ── Tool 2: brick_build_structure (model-only, no frame) ────────────────
+  // ── Tool 3: brick_place (model-only, no frame) ───────────────────────
+  // Replaces brick_build_structure with a streaming-friendly tool.
   // Uses server.tool() so it does NOT create a new app frame.
-  // The app discovers changes via polling (brick_poll_scene).
+  // Bricks are added one at a time with delays so the app's adaptive
+  // polling picks them up for live building visualization.
 
   server.tool(
-    "brick_build_structure",
-    `Batch-add multiple bricks in one call. Skips any brick that would collide or fall outside the baseplate. The baseplate is ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs. Valid coordinates: x 0–${BASEPLATE_SIZE - 1}, z 0–${BASEPLATE_SIZE - 1}. Use this to build structures efficiently.`,
+    "brick_place",
+    `Place one or more bricks. Each brick appears live in the 3D viewer as it's placed. Skips bricks that collide or fall outside bounds. The baseplate is ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs. You can call this multiple times to build incrementally — e.g. foundation first, then walls, then roof.`,
     {
       bricks: z.array(
         z.object({
-          typeId: z.string().describe("Brick type ID, e.g. 'brick_2x4'"),
+          typeId: z.string().describe("Brick type ID from brick_read_me catalog"),
           x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-          y: z.number().int().min(0).describe("Y position in plate-height units"),
+          y: z.number().int().min(0).describe("Y position in plate-height units (0 = ground)"),
           z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
           rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation in degrees"),
           color: z.string().optional().default("#cc0000").describe("Hex color"),
         }),
-      ).describe("Array of bricks to add"),
-      clearFirst: z.boolean().optional().default(false).describe("Clear scene before adding"),
+      ).describe("Array of bricks to place"),
+      clearFirst: z.boolean().optional().default(false).describe("Clear scene before placing"),
     },
     async ({ bricks, clearFirst }) => {
       if (clearFirst) {
         scene.bricks = [];
+        sceneVersion++;
       }
       let added = 0;
       let skipped = 0;
-      for (const b of bricks) {
+      const BRICK_DELAY_MS = 80; // ms between bricks for live building effect
+      for (let i = 0; i < bricks.length; i++) {
+        const b = bricks[i];
         const brickType = findBrickType(b.typeId);
         if (!brickType) {
           skipped++;
@@ -280,23 +375,41 @@ export function createServer(): McpServer {
           continue;
         }
         scene.bricks.push(instance);
+        sceneVersion++;
         added++;
+        // Yield to event loop so poll requests see each brick as it's placed
+        if (i < bricks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, BRICK_DELAY_MS));
+        }
       }
-      sceneVersion++;
-      return sceneResult(`Added ${added} bricks${skipped > 0 ? `, skipped ${skipped} (collision/invalid/out-of-bounds)` : ""}`);
+      return sceneResult(`Placed ${added} bricks${skipped > 0 ? `, skipped ${skipped} (collision/invalid/out-of-bounds)` : ""}`);
     },
   );
 
-  // ── Tool 3: brick_get_scene (model-only, no frame) ──────────────────────
+  // ── Tool 4: brick_get_scene (model-only, no frame) ──────────────────────
 
   server.tool(
     "brick_get_scene",
-    "Returns the current scene state including all bricks and their positions. Use this to see what the user has built.",
+    "Returns the current scene state including all bricks and their positions. Use this to see what the user has built or to check your work.",
     {},
     async () => sceneResult(),
   );
 
-  // ── Tool 4: brick_export_scene (no frame) ────────────────────────────────
+  // ── Tool 5: brick_clear_scene (no frame) ──────────────────────────────
+
+  server.tool(
+    "brick_clear_scene",
+    "Remove all bricks from the scene. Use this to start fresh.",
+    {},
+    async () => {
+      const count = scene.bricks.length;
+      scene.bricks = [];
+      sceneVersion++;
+      return sceneResult(`Cleared ${count} bricks`);
+    },
+  );
+
+  // ── Tool 6: brick_export_scene (no frame) ────────────────────────────────
 
   server.tool(
     "brick_export_scene",
@@ -338,7 +451,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 5: brick_add ───────────────────────────────────────────────────
+  // ── Tool 7: brick_add (app-only) ────────────────────────────────────────
 
   registerAppTool(
     server,
@@ -381,7 +494,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 6: brick_remove ────────────────────────────────────────────────
+  // ── Tool 8: brick_remove (app-only) ─────────────────────────────────────
 
   registerAppTool(
     server,
@@ -405,7 +518,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 7: brick_move ──────────────────────────────────────────────────
+  // ── Tool 9: brick_move (app-only) ───────────────────────────────────────
 
   registerAppTool(
     server,
@@ -440,7 +553,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 8: brick_rotate ────────────────────────────────────────────────
+  // ── Tool 10: brick_rotate (app-only) ────────────────────────────────────
 
   registerAppTool(
     server,
@@ -473,7 +586,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 9: brick_paint ─────────────────────────────────────────────────
+  // ── Tool 11: brick_paint (app-only) ─────────────────────────────────────
 
   registerAppTool(
     server,
@@ -498,21 +611,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 10: brick_clear_scene (no frame) ────────────────────────────────
-
-  server.tool(
-    "brick_clear_scene",
-    "Remove all bricks from the scene.",
-    {},
-    async () => {
-      const count = scene.bricks.length;
-      scene.bricks = [];
-      sceneVersion++;
-      return sceneResult(`Cleared ${count} bricks`);
-    },
-  );
-
-  // ── Tool 11: brick_set_camera ───────────────────────────────────────────
+  // ── Tool 12: brick_set_camera (app-only) ────────────────────────────────
 
   registerAppTool(
     server,
@@ -543,7 +642,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 12: brick_import_scene ─────────────────────────────────────────
+  // ── Tool 13: brick_import_scene (app-only) ──────────────────────────────
 
   registerAppTool(
     server,
@@ -571,7 +670,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 13: brick_set_scene_name ───────────────────────────────────────
+  // ── Tool 14: brick_set_scene_name (app-only) ────────────────────────────
 
   registerAppTool(
     server,
@@ -591,7 +690,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 14: brick_get_catalog (app-only) ───────────────────────────────
+  // ── Tool 15: brick_get_catalog (app-only) ───────────────────────────────
 
   registerAppTool(
     server,
@@ -609,7 +708,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 15: brick_poll_scene (app-only) ────────────────────────────────
+  // ── Tool 16: brick_poll_scene (app-only) ────────────────────────────────
 
   registerAppTool(
     server,
