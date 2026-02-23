@@ -1,0 +1,1410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Brick Builder - Visual Test Harness</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; background: #1a1a2e; color: #e0e0e0; }
+  h1 { color: #00d4aa; font-size: 16px; }
+  .subtitle { color: #888; font-size: 11px; }
+
+  /* Top bar */
+  .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #0f3460; background: #16213e; }
+  .topbar .conn-row { display: flex; gap: 6px; align-items: center; }
+  .topbar input { background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0; padding: 4px 8px; border-radius: 4px; font-family: inherit; font-size: 11px; width: 240px; }
+  .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+  .status.disconnected { background: #ff4444; }
+  .status.connected { background: #00d4aa; }
+  .session-label { font-size: 10px; color: #666; }
+
+  /* Layout */
+  .main-layout { display: grid; grid-template-columns: 1fr 360px; height: calc(100vh - 48px); }
+
+  /* 3D viewport */
+  #viewport { position: relative; background: #0d1117; overflow: hidden; }
+  #viewport canvas { display: block; width: 100%; height: 100%; }
+  .viewport-overlay { position: absolute; bottom: 10px; left: 10px; font-size: 10px; color: #555; pointer-events: none; }
+
+  /* Right sidebar */
+  .sidebar { display: flex; flex-direction: column; border-left: 1px solid #0f3460; overflow-y: auto; }
+  .panel { background: #16213e; border-bottom: 1px solid #0f3460; padding: 10px 12px; }
+  .panel h2 { font-size: 12px; color: #00d4aa; margin-bottom: 8px; }
+
+  /* Buttons */
+  button { background: #0f3460; border: 1px solid #00d4aa33; color: #e0e0e0; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 10px; transition: all 0.15s; }
+  button:hover { background: #1a4a7a; border-color: #00d4aa66; }
+  button:active { transform: scale(0.97); }
+  button.primary { background: #00d4aa22; border-color: #00d4aa; color: #00d4aa; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+
+  /* Scene state */
+  .scene-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 11px; }
+  .scene-grid .label { color: #888; }
+  .scene-grid .value { color: #fff; }
+  .brick-list { max-height: 120px; overflow-y: auto; margin-top: 6px; }
+  .brick-item { font-size: 10px; padding: 2px 6px; background: #0a0a1a; border-radius: 3px; margin-bottom: 1px; display: flex; align-items: center; gap: 6px; }
+  .brick-swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid #333; flex-shrink: 0; }
+
+  /* Log */
+  #log { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 6px; height: 200px; overflow-y: auto; font-size: 10px; line-height: 1.5; }
+  .log-line { white-space: pre-wrap; word-break: break-all; }
+  .log-line.pass { color: #00d4aa; }
+  .log-line.fail { color: #ff4444; }
+  .log-line.info { color: #6ec6ff; }
+  .log-line.warn { color: #ffaa00; }
+  .log-line.dim { color: #555; }
+  .log-line.header { color: #fff; font-weight: bold; border-top: 1px solid #0f3460; padding-top: 3px; margin-top: 3px; }
+
+  /* Manual tool */
+  .tool-form { display: flex; flex-direction: column; gap: 4px; }
+  .tool-form select, .tool-form textarea { background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0; padding: 4px; border-radius: 4px; font-family: inherit; font-size: 10px; }
+  .tool-form textarea { height: 60px; resize: vertical; }
+  #manualResult { font-size: 10px; max-height: 100px; overflow-y: auto; background: #0a0a1a; border-radius: 4px; padding: 6px; white-space: pre-wrap; word-break: break-all; display: none; }
+
+  /* Placement controls */
+  .color-palette { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
+  .color-swatch { width: 20px; height: 20px; border-radius: 3px; border: 2px solid transparent; cursor: pointer; transition: border-color 0.15s; }
+  .color-swatch:hover { border-color: #ffffff88; }
+  .color-swatch.selected { border-color: #00d4aa; }
+  .placement-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .placement-row select { background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0; padding: 3px 6px; border-radius: 4px; font-family: inherit; font-size: 10px; flex: 1; }
+  .placement-row .rot-display { font-size: 10px; color: #888; min-width: 28px; text-align: center; }
+  button.active { background: #00d4aa33; border-color: #00d4aa; color: #00d4aa; }
+  .placement-status { font-size: 10px; color: #888; margin-top: 4px; min-height: 14px; }
+
+  /* Viewport cursor overlay */
+  .cursor-overlay { position: absolute; top: 8px; left: 8px; font-size: 10px; color: #aaa; background: #0a0a1acc; padding: 4px 8px; border-radius: 4px; pointer-events: none; display: none; font-family: inherit; }
+  .cursor-overlay.valid { color: #00d4aa; }
+  .cursor-overlay.blocked { color: #ff4444; }
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.181.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.181.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<!-- Top bar: title + connection -->
+<div class="topbar">
+  <h1>Brick Builder - Visual Test Harness</h1>
+  <span class="subtitle">No LLM required</span>
+  <div style="flex:1"></div>
+  <div class="conn-row">
+    <span class="status disconnected" id="connStatus"></span>
+    <input id="serverUrl" value="http://localhost:3001/mcp" />
+    <button id="btnConnect" class="primary" onclick="initSession()">Connect</button>
+    <span class="session-label" id="sessionInfo"></span>
+  </div>
+</div>
+
+<div class="main-layout">
+  <!-- 3D Viewport -->
+  <div id="viewport">
+    <div class="cursor-overlay" id="cursorOverlay"></div>
+    <div class="viewport-overlay" id="viewportInfo">No scene loaded. Connect to server first.</div>
+  </div>
+
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <!-- Placement Controls -->
+    <div class="panel">
+      <h2>Placement Controls</h2>
+      <div class="btn-row">
+        <button id="btnPlacement" onclick="togglePlacement()">Enable Placement</button>
+      </div>
+      <div class="placement-row">
+        <select id="placeType"></select>
+        <button onclick="rotatePlacement()" title="Rotate (R)">Rot</button>
+        <span class="rot-display" id="rotDisplay">0°</span>
+      </div>
+      <div>
+        <span style="font-size:10px; color:#888;">Color:</span>
+        <div class="color-palette" id="colorPalette"></div>
+      </div>
+      <div class="placement-status" id="placementStatus"></div>
+    </div>
+
+    <!-- Scene State -->
+    <div class="panel">
+      <h2>Scene State</h2>
+      <div class="scene-grid">
+        <span class="label">Version:</span><span class="value" id="scVersion">-</span>
+        <span class="label">Bricks:</span><span class="value" id="scCount">-</span>
+      </div>
+      <div style="margin-top: 6px;">
+        <button onclick="refreshScene()">Refresh</button>
+      </div>
+      <div class="brick-list" id="brickList"></div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="panel">
+      <h2>Quick Actions</h2>
+      <div class="btn-row">
+        <button onclick="quickBuild()">Perimeter Wall</button>
+        <button onclick="quickAdd()">Random Brick</button>
+        <button onclick="quickTower()">Tower (6)</button>
+        <button onclick="quickClear()">Clear</button>
+      </div>
+    </div>
+
+    <!-- Automated Tests -->
+    <div class="panel">
+      <h2>Tests</h2>
+      <div class="btn-row">
+        <button class="primary" onclick="runAllTests()" id="btnRunAll">Run All</button>
+        <button onclick="clearLog()">Clear Log</button>
+      </div>
+      <div class="btn-row">
+        <button onclick="runTest('build3')">Build 3</button>
+        <button onclick="runTest('renderCheck')">Render</button>
+        <button onclick="runTest('addBrick')">Add</button>
+        <button onclick="runTest('addAnother')">Add 2nd</button>
+        <button onclick="runTest('pollCheck')">Poll</button>
+        <button onclick="runTest('clear')">Clear</button>
+      </div>
+      <div id="log"></div>
+    </div>
+
+    <!-- Manual Tool Call -->
+    <div class="panel">
+      <h2>Manual Tool Call</h2>
+      <div class="tool-form">
+        <select id="toolName">
+          <option value="brick_render_scene">brick_render_scene</option>
+          <option value="brick_build_structure">brick_build_structure</option>
+          <option value="brick_get_scene">brick_get_scene</option>
+          <option value="brick_add">brick_add</option>
+          <option value="brick_remove">brick_remove</option>
+          <option value="brick_clear_scene">brick_clear_scene</option>
+          <option value="brick_poll_scene">brick_poll_scene</option>
+          <option value="brick_export_scene">brick_export_scene</option>
+        </select>
+        <textarea id="toolArgs" placeholder='{"typeId":"brick_2x4","x":0,"y":0,"z":0,"color":"#cc0000"}'>{}</textarea>
+        <button class="primary" onclick="callManualTool()">Call Tool</button>
+      </div>
+      <div id="manualResult"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+// ── Colors (mirrored from src/constants.ts) ──────────────────────────────────
+const DEFAULT_COLORS = [
+  { name: 'Red', hex: '#cc0000' },
+  { name: 'Blue', hex: '#0055bf' },
+  { name: 'Green', hex: '#00852b' },
+  { name: 'Yellow', hex: '#ffd700' },
+  { name: 'White', hex: '#f2f3f2' },
+  { name: 'Black', hex: '#1b2a34' },
+  { name: 'Orange', hex: '#fe8a18' },
+  { name: 'Magenta', hex: '#923978' },
+  { name: 'Brown', hex: '#583927' },
+  { name: 'Dark Gray', hex: '#6d6e5c' },
+  { name: 'Light Gray', hex: '#9ba19d' },
+  { name: 'Tan', hex: '#e4cd9e' },
+  { name: 'Teal', hex: '#008f9b' },
+  { name: 'Pink', hex: '#fc97ac' },
+  { name: 'Lime', hex: '#bbd672' },
+  { name: 'Peach', hex: '#f9b7a5' },
+];
+
+// ── Constants (mirrored from src/constants.ts) ────────────────────────────────
+const STUD_SIZE = 1.0;
+const STUD_DIAMETER = 0.6;
+const STUD_HEIGHT = 0.2;
+const PLATE_HEIGHT = 0.4;
+const BRICK_HEIGHT = 1.2;
+const BASEPLATE_SIZE = 48;
+
+// Brick categories
+const CAT = { BRICK: 'brick', PLATE: 'plate', SLOPE: 'slope', TECHNIC: 'technic', CORNER: 'corner' };
+
+// Brick catalog (mirrored from server.ts)
+const BRICK_CATALOG = {
+  brick_1x1:   { category: CAT.BRICK,   studsX: 1, studsZ: 1, heightUnits: 3 },
+  brick_1x2:   { category: CAT.BRICK,   studsX: 1, studsZ: 2, heightUnits: 3 },
+  brick_1x3:   { category: CAT.BRICK,   studsX: 1, studsZ: 3, heightUnits: 3 },
+  brick_1x4:   { category: CAT.BRICK,   studsX: 1, studsZ: 4, heightUnits: 3 },
+  brick_1x6:   { category: CAT.BRICK,   studsX: 1, studsZ: 6, heightUnits: 3 },
+  brick_1x8:   { category: CAT.BRICK,   studsX: 1, studsZ: 8, heightUnits: 3 },
+  brick_2x2:   { category: CAT.BRICK,   studsX: 2, studsZ: 2, heightUnits: 3 },
+  brick_2x3:   { category: CAT.BRICK,   studsX: 2, studsZ: 3, heightUnits: 3 },
+  brick_2x4:   { category: CAT.BRICK,   studsX: 2, studsZ: 4, heightUnits: 3 },
+  brick_2x6:   { category: CAT.BRICK,   studsX: 2, studsZ: 6, heightUnits: 3 },
+  brick_2x8:   { category: CAT.BRICK,   studsX: 2, studsZ: 8, heightUnits: 3 },
+  plate_1x1:   { category: CAT.PLATE,   studsX: 1, studsZ: 1, heightUnits: 1 },
+  plate_1x2:   { category: CAT.PLATE,   studsX: 1, studsZ: 2, heightUnits: 1 },
+  plate_1x4:   { category: CAT.PLATE,   studsX: 1, studsZ: 4, heightUnits: 1 },
+  plate_2x2:   { category: CAT.PLATE,   studsX: 2, studsZ: 2, heightUnits: 1 },
+  plate_2x4:   { category: CAT.PLATE,   studsX: 2, studsZ: 4, heightUnits: 1 },
+  plate_2x6:   { category: CAT.PLATE,   studsX: 2, studsZ: 6, heightUnits: 1 },
+  plate_4x4:   { category: CAT.PLATE,   studsX: 4, studsZ: 4, heightUnits: 1 },
+  slope_2x2:   { category: CAT.SLOPE,   studsX: 2, studsZ: 2, heightUnits: 3 },
+  technic_1x2: { category: CAT.TECHNIC, studsX: 1, studsZ: 2, heightUnits: 3 },
+  technic_1x4: { category: CAT.TECHNIC, studsX: 1, studsZ: 4, heightUnits: 3 },
+  technic_1x6: { category: CAT.TECHNIC, studsX: 1, studsZ: 6, heightUnits: 3 },
+  technic_1x8: { category: CAT.TECHNIC, studsX: 1, studsZ: 8, heightUnits: 3 },
+  technic_2x4: { category: CAT.TECHNIC, studsX: 2, studsZ: 4, heightUnits: 3 },
+  corner_2x2:  { category: CAT.CORNER,  studsX: 2, studsZ: 2, heightUnits: 1 },
+};
+
+// ── Three.js Scene Setup ─────────────────────────────────────────────────────
+
+const viewport = document.getElementById('viewport');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.setClearColor(0x1a1a2e);
+viewport.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 500);
+const bpCenter = BASEPLATE_SIZE * STUD_SIZE / 2;
+camera.position.set(bpCenter + 30, 25, bpCenter + 30);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(bpCenter, 0, bpCenter);
+controls.enableDamping = true;
+controls.dampingFactor = 0.1;
+controls.update();
+
+// Lighting
+const ambient = new THREE.AmbientLight(0xffffff, 0.6);
+scene.add(ambient);
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(30, 40, 20);
+dirLight.castShadow = true;
+dirLight.shadow.mapSize.set(2048, 2048);
+dirLight.shadow.camera.left = -60; dirLight.shadow.camera.right = 60;
+dirLight.shadow.camera.top = 60; dirLight.shadow.camera.bottom = -60;
+scene.add(dirLight);
+
+// Baseplate
+const bpSize = BASEPLATE_SIZE * STUD_SIZE;
+const baseplateGeo = new THREE.BoxGeometry(bpSize, 0.2, bpSize);
+baseplateGeo.translate(bpSize / 2, -0.1, bpSize / 2);
+const baseplateMat = new THREE.MeshStandardMaterial({ color: 0x4a7c59, roughness: 0.8 });
+const baseplate = new THREE.Mesh(baseplateGeo, baseplateMat);
+baseplate.receiveShadow = true;
+scene.add(baseplate);
+
+// Border (raised edge around baseplate)
+const borderHeight = 0.5, borderWidth = 0.2 * STUD_SIZE, borderY = borderHeight / 2;
+const borderMat = new THREE.MeshStandardMaterial({ color: 0x1e3a28, roughness: 0.7 });
+const borderParts = [];
+const front = new THREE.BoxGeometry(bpSize + borderWidth * 2, borderHeight, borderWidth);
+front.translate(bpSize / 2, borderY, -borderWidth / 2); borderParts.push(front);
+const back = new THREE.BoxGeometry(bpSize + borderWidth * 2, borderHeight, borderWidth);
+back.translate(bpSize / 2, borderY, bpSize + borderWidth / 2); borderParts.push(back);
+const left = new THREE.BoxGeometry(borderWidth, borderHeight, bpSize);
+left.translate(-borderWidth / 2, borderY, bpSize / 2); borderParts.push(left);
+const right = new THREE.BoxGeometry(borderWidth, borderHeight, bpSize);
+right.translate(bpSize + borderWidth / 2, borderY, bpSize / 2); borderParts.push(right);
+const borderMesh = new THREE.Mesh(mergeGeometries(borderParts), borderMat);
+borderMesh.receiveShadow = true;
+scene.add(borderMesh);
+
+// Grid
+const grid = new THREE.GridHelper(bpSize, BASEPLATE_SIZE, 0x000000, 0x000000);
+grid.position.set(bpSize / 2, 0.001, bpSize / 2);
+grid.material.opacity = 0.12;
+grid.material.transparent = true;
+scene.add(grid);
+
+// Invisible ground plane for raycasting
+const groundPlaneGeo = new THREE.PlaneGeometry(bpSize, bpSize);
+groundPlaneGeo.rotateX(-Math.PI / 2);
+groundPlaneGeo.translate(bpSize / 2, 0, bpSize / 2);
+const groundPlaneMat = new THREE.MeshBasicMaterial({ visible: false });
+const groundPlane = new THREE.Mesh(groundPlaneGeo, groundPlaneMat);
+scene.add(groundPlane);
+
+// Brick group — all bricks go here
+const brickGroup = new THREE.Group();
+scene.add(brickGroup);
+const brickMeshMap = new Map(); // id -> mesh
+
+function createBrickMesh(brick) {
+  const catalog = BRICK_CATALOG[brick.typeId];
+  if (!catalog) return null;
+
+  let studsX = catalog.studsX;
+  let studsZ = catalog.studsZ;
+  const heightUnits = catalog.heightUnits;
+
+  // Apply rotation swap (skip for slope/corner — they use geometry rotation instead)
+  const rot = brick.rotation || 0;
+  const cat = catalog.category;
+  if (cat !== CAT.SLOPE && cat !== CAT.CORNER && (rot === 90 || rot === 270)) {
+    [studsX, studsZ] = [studsZ, studsX];
+  }
+
+  const w = studsX * STUD_SIZE;
+  const h = heightUnits * PLATE_HEIGHT;
+  const d = studsZ * STUD_SIZE;
+
+  // Real-brick proportions (from MachineBlocks OpenSCAD reference)
+  // Wall: 1.2mm / 8mm grid = 0.15 stud units
+  // Stud inner hole: 3.2mm dia → 0.2 radius in stud units
+  // Underside tube outer: 6.51mm dia → 0.407 radius
+  // Underside tube inner: 4.8mm dia → 0.3 radius (= stud outer)
+  const WALL = 0.15;
+  const STUD_IR = 0.2;
+  const TUBE_OR = 0.407;
+  const TUBE_IR = STUD_DIAMETER / 2;
+  const CURVE_SEG = 16;
+
+  const parts = [];
+
+  // Helper: create a rectangular wall shape with circular pin holes
+  function technicWallShape(wallWidth, holePositions, wallBot, wallTop, holeY, pinR) {
+    const shape = new THREE.Shape();
+    shape.moveTo(-wallWidth / 2, wallBot);
+    shape.lineTo(wallWidth / 2, wallBot);
+    shape.lineTo(wallWidth / 2, wallTop);
+    shape.lineTo(-wallWidth / 2, wallTop);
+    shape.lineTo(-wallWidth / 2, wallBot);
+    for (const hp of holePositions) {
+      const hole = new THREE.Path();
+      hole.absarc(hp, holeY, pinR, 0, Math.PI * 2, true);
+      shape.holes.push(hole);
+    }
+    return shape;
+  }
+
+  if (cat === CAT.SLOPE) {
+    // 45° slope: flat top at back row (studs), slope face on front row
+    // Pentagon cross-section in shape space (shape_x → −world_z after rotateY(π/2)):
+    //   shape +x = back (world −Z), shape −x = front (world +Z)
+    //
+    //   back-top _________ mid-top (front edge of flat top)
+    //           |         \
+    //           |          \  45° slope face
+    //           |           \
+    //           |            \ front-slope-meet
+    //           |            |  short vertical front wall
+    //           |____________|
+    //   back-bottom    front-bottom
+    //
+    const slopeRun = d / 2;  // slope spans front half (1 stud depth)
+    const frontWallTop = h / 2 - slopeRun;  // 45° → drop = run
+
+    const slopeShape = new THREE.Shape();
+    slopeShape.moveTo(-d / 2, -h / 2);              // front-bottom
+    slopeShape.lineTo( d / 2, -h / 2);               // back-bottom
+    slopeShape.lineTo( d / 2,  h / 2);               // back-top
+    slopeShape.lineTo( 0,      h / 2);               // mid-top (front edge of flat top)
+    slopeShape.lineTo(-d / 2,  frontWallTop);        // slope meets front wall
+    slopeShape.closePath();
+
+    const slopeGeo = new THREE.ExtrudeGeometry(slopeShape, {
+      depth: w, bevelEnabled: false,
+    });
+    // Extrude was along +Z; rotate so extrude axis aligns with world X (width)
+    slopeGeo.rotateY(Math.PI / 2);
+    slopeGeo.translate(-w / 2, 0, 0);
+    parts.push(slopeGeo);
+  } else if (cat === CAT.CORNER) {
+    // L-shaped body: two overlapping boxes, notch at +X,+Z before rotation
+    // Arm 1: full width, bottom half of Z
+    const arm1 = new THREE.BoxGeometry(w, h, d / 2);
+    arm1.translate(0, 0, -d / 4);
+    parts.push(arm1);
+    // Arm 2: left half of X, top half of Z
+    const arm2 = new THREE.BoxGeometry(w / 2, h, d / 2);
+    arm2.translate(-w / 4, 0, d / 4);
+    parts.push(arm2);
+  } else {
+    // ── Top plate (shared by regular + technic) ──
+    const topPlate = new THREE.BoxGeometry(w, WALL, d);
+    topPlate.translate(0, h / 2 - WALL / 2, 0);
+    parts.push(topPlate);
+
+    const wallH = h - WALL;
+    const wallY = -WALL / 2;
+    const wallBot = -h / 2;
+    const wallTop = h / 2 - WALL;
+    const innerD = d - WALL * 2;
+
+    // ── Walls ──
+    if (cat === CAT.TECHNIC) {
+      const PIN_R = 0.3; // pin hole radius (4.8mm diameter)
+      const holeCenterY = 0; // holes centered on brick body
+      const extSettings = { depth: WALL, bevelEnabled: false, curveSegments: CURVE_SEG };
+
+      // Front/back walls — holes centered between stud rows along X
+      const fbHoleCount = studsX - 1;
+      if (fbHoleCount > 0) {
+        const fbHoles = [];
+        for (let i = 0; i < fbHoleCount; i++) {
+          fbHoles.push((i - studsX / 2 + 1) * STUD_SIZE);
+        }
+        const fbShape = technicWallShape(w, fbHoles, wallBot, wallTop, holeCenterY, PIN_R);
+
+        const frontGeo = new THREE.ExtrudeGeometry(fbShape, extSettings);
+        frontGeo.translate(0, 0, -d / 2);
+        parts.push(frontGeo);
+
+        const backGeo = new THREE.ExtrudeGeometry(fbShape, extSettings);
+        backGeo.translate(0, 0, d / 2 - WALL);
+        parts.push(backGeo);
+      } else {
+        // 1-wide: no holes on short faces
+        const fWall = new THREE.BoxGeometry(w, wallH, WALL);
+        fWall.translate(0, wallY, -d / 2 + WALL / 2);
+        parts.push(fWall);
+        const bkWall = new THREE.BoxGeometry(w, wallH, WALL);
+        bkWall.translate(0, wallY, d / 2 - WALL / 2);
+        parts.push(bkWall);
+      }
+
+      // Left/right walls — holes centered between stud columns along Z
+      const lrHoleCount = studsZ - 1;
+      if (lrHoleCount > 0) {
+        const lrHoles = [];
+        for (let i = 0; i < lrHoleCount; i++) {
+          lrHoles.push((i - studsZ / 2 + 1) * STUD_SIZE);
+        }
+        const lrShape = technicWallShape(innerD, lrHoles, wallBot, wallTop, holeCenterY, PIN_R);
+
+        const leftGeo = new THREE.ExtrudeGeometry(lrShape, extSettings);
+        leftGeo.rotateY(Math.PI / 2);
+        leftGeo.translate(-w / 2, 0, 0);
+        parts.push(leftGeo);
+
+        const rightGeo = new THREE.ExtrudeGeometry(lrShape, extSettings);
+        rightGeo.rotateY(Math.PI / 2);
+        rightGeo.translate(w / 2 - WALL, 0, 0);
+        parts.push(rightGeo);
+      } else {
+        const lWall = new THREE.BoxGeometry(WALL, wallH, innerD);
+        lWall.translate(-w / 2 + WALL / 2, wallY, 0);
+        parts.push(lWall);
+        const rWall = new THREE.BoxGeometry(WALL, wallH, innerD);
+        rWall.translate(w / 2 - WALL / 2, wallY, 0);
+        parts.push(rWall);
+      }
+    } else {
+      // ── Regular solid walls ──
+      const fWall = new THREE.BoxGeometry(w, wallH, WALL);
+      fWall.translate(0, wallY, -d / 2 + WALL / 2);
+      parts.push(fWall);
+
+      const bkWall = new THREE.BoxGeometry(w, wallH, WALL);
+      bkWall.translate(0, wallY, d / 2 - WALL / 2);
+      parts.push(bkWall);
+
+      const lWall = new THREE.BoxGeometry(WALL, wallH, innerD);
+      lWall.translate(-w / 2 + WALL / 2, wallY, 0);
+      parts.push(lWall);
+
+      const rWall = new THREE.BoxGeometry(WALL, wallH, innerD);
+      rWall.translate(w / 2 - WALL / 2, wallY, 0);
+      parts.push(rWall);
+    }
+
+    // ── Underside tubes (for 2+ wide bricks) ──
+    if (studsX >= 2 && studsZ >= 2) {
+      const tubeShape = new THREE.Shape();
+      tubeShape.absarc(0, 0, TUBE_OR, 0, Math.PI * 2, false);
+      const tubeHole = new THREE.Path();
+      tubeHole.absarc(0, 0, TUBE_IR, 0, Math.PI * 2, true);
+      tubeShape.holes.push(tubeHole);
+
+      const baseTubeGeo = new THREE.ExtrudeGeometry(tubeShape, {
+        depth: wallH, bevelEnabled: false, curveSegments: CURVE_SEG,
+      });
+      baseTubeGeo.rotateX(-Math.PI / 2);
+
+      for (let tx = 0; tx < studsX - 1; tx++) {
+        for (let tz = 0; tz < studsZ - 1; tz++) {
+          const tube = baseTubeGeo.clone();
+          tube.translate(
+            (tx - studsX / 2 + 1) * STUD_SIZE,
+            -h / 2,
+            (tz - studsZ / 2 + 1) * STUD_SIZE,
+          );
+          parts.push(tube);
+        }
+      }
+    } else if ((studsX === 1 && studsZ >= 2) || (studsZ === 1 && studsX >= 2)) {
+      // Ribs for 1-wide bricks
+      const ribT = 0.1;
+      if (studsX === 1) {
+        for (let tz = 0; tz < studsZ - 1; tz++) {
+          const rib = new THREE.BoxGeometry(w - WALL * 2, wallH, ribT);
+          rib.translate(0, wallY, (tz - studsZ / 2 + 1) * STUD_SIZE);
+          parts.push(rib);
+        }
+      } else {
+        for (let tx = 0; tx < studsX - 1; tx++) {
+          const rib = new THREE.BoxGeometry(ribT, wallH, d - WALL * 2);
+          rib.translate((tx - studsX / 2 + 1) * STUD_SIZE, wallY, 0);
+          parts.push(rib);
+        }
+      }
+    }
+  }
+
+  // ── Studs (hollow annular rings) ──
+  {
+    const studShape = new THREE.Shape();
+    studShape.absarc(0, 0, STUD_DIAMETER / 2, 0, Math.PI * 2, false);
+    const studHole = new THREE.Path();
+    studHole.absarc(0, 0, STUD_IR, 0, Math.PI * 2, true);
+    studShape.holes.push(studHole);
+
+    const baseStudGeo = new THREE.ExtrudeGeometry(studShape, {
+      depth: STUD_HEIGHT, bevelEnabled: false, curveSegments: CURVE_SEG,
+    });
+    baseStudGeo.rotateX(-Math.PI / 2);
+
+    for (let sx = 0; sx < studsX; sx++) {
+      for (let sz = 0; sz < studsZ; sz++) {
+        // Skip notch corner for L-shaped corner pieces
+        if (cat === CAT.CORNER && sx === studsX - 1 && sz === studsZ - 1) continue;
+        // Slopes: studs only on the back row (sz === 0, the flat full-height side)
+        if (cat === CAT.SLOPE && sz !== 0) continue;
+        const stud = baseStudGeo.clone();
+        stud.translate(
+          (sx - studsX / 2 + 0.5) * STUD_SIZE,
+          h / 2,
+          (sz - studsZ / 2 + 0.5) * STUD_SIZE,
+        );
+        parts.push(stud);
+      }
+    }
+  }
+
+  // Normalize all parts to non-indexed so mergeGeometries can combine
+  // ExtrudeGeometry (hollow studs/tubes) with BoxGeometry (walls) reliably
+  const merged = mergeGeometries(parts.map(g => g.toNonIndexed()));
+
+  // Corner + slope pieces need actual geometry rotation (pre-swap is a no-op for 2x2)
+  if ((cat === CAT.CORNER || cat === CAT.SLOPE) && rot !== 0) {
+    merged.rotateY(-rot * Math.PI / 180);
+  }
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(brick.color),
+    roughness: 0.4,
+    metalness: 0.05,
+  });
+  const mesh = new THREE.Mesh(merged, mat);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+
+  // Position: server coordinates are in stud units, Y is height-unit based
+  const pos = brick.position;
+  mesh.position.set(
+    pos.x * STUD_SIZE + w / 2,
+    pos.y * PLATE_HEIGHT + h / 2,
+    pos.z * STUD_SIZE + d / 2,
+  );
+
+  return mesh;
+}
+
+function reconcileScene(bricks) {
+  const incoming = new Set(bricks.map(b => b.id));
+
+  // Remove deleted bricks
+  for (const [id, mesh] of brickMeshMap) {
+    if (!incoming.has(id)) {
+      brickGroup.remove(mesh);
+      mesh.geometry.dispose();
+      mesh.material.dispose();
+      brickMeshMap.delete(id);
+    }
+  }
+
+  // Add/update bricks
+  for (const brick of bricks) {
+    if (brickMeshMap.has(brick.id)) continue; // already rendered
+    const mesh = createBrickMesh(brick);
+    if (mesh) {
+      brickGroup.add(mesh);
+      brickMeshMap.set(brick.id, mesh);
+    }
+  }
+}
+
+// Resize
+function onResize() {
+  const w = viewport.clientWidth;
+  const h = viewport.clientHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setSize(w, h);
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+// Render loop
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── MCP Client ───────────────────────────────────────────────────────────────
+
+let sessionId = null;
+let requestId = 0;
+
+function getUrl() {
+  return document.getElementById('serverUrl').value;
+}
+
+async function mcpRequest(body) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json, text/event-stream',
+  };
+  if (sessionId) headers['mcp-session-id'] = sessionId;
+
+  const res = await fetch(getUrl(), { method: 'POST', headers, body: JSON.stringify(body) });
+
+  const respSession = res.headers.get('mcp-session-id');
+  if (respSession) sessionId = respSession;
+
+  const text = await res.text();
+  let parsed;
+  if (text.startsWith('event:') || text.includes('\ndata:')) {
+    const dataLine = text.split('\n').find(l => l.startsWith('data:'));
+    if (dataLine) {
+      try { parsed = JSON.parse(dataLine.slice(5).trim()); } catch { parsed = text; }
+    } else {
+      parsed = text;
+    }
+  } else {
+    try { parsed = JSON.parse(text); } catch { parsed = text; }
+  }
+  return { status: res.status, body: parsed };
+}
+
+async function callTool(name, args = {}) {
+  return mcpRequest({
+    jsonrpc: '2.0', id: ++requestId,
+    method: 'tools/call',
+    params: { name, arguments: args },
+  });
+}
+
+function parseToolPayload(responseBody) {
+  const textContent = responseBody?.result?.content?.find(c => c.type === 'text');
+  if (!textContent) return null;
+  try { return JSON.parse(textContent.text); } catch { return null; }
+}
+
+// ── Scene Display ────────────────────────────────────────────────────────────
+
+let currentBricks = [];
+
+function updateSceneDisplay(payload) {
+  if (!payload) return;
+  document.getElementById('scVersion').textContent = payload.version ?? '-';
+  if (payload.scene) {
+    currentBricks = payload.scene.bricks;
+    document.getElementById('scCount').textContent = payload.scene.bricks.length;
+
+    // Update 3D viewport
+    reconcileScene(payload.scene.bricks);
+
+    // Update overlay
+    document.getElementById('viewportInfo').textContent =
+      `v${payload.version} | ${payload.scene.bricks.length} bricks | Orbit: drag | Zoom: scroll`;
+
+    // Update brick list
+    const list = document.getElementById('brickList');
+    if (payload.scene.bricks.length === 0) {
+      list.innerHTML = '<div style="color:#555; font-size:10px; padding:4px;">No bricks</div>';
+    } else {
+      list.innerHTML = payload.scene.bricks.map(b =>
+        `<div class="brick-item">
+          <span class="brick-swatch" style="background:${b.color}"></span>
+          <span>${b.typeId} (${b.position.x},${b.position.y},${b.position.z})</span>
+          <span style="color:#555; margin-left:auto;">${b.id.slice(0,6)}</span>
+        </div>`
+      ).join('');
+    }
+  }
+}
+
+async function refreshScene() {
+  try {
+    const resp = await callTool('brick_get_scene');
+    const payload = parseToolPayload(resp.body);
+    updateSceneDisplay(payload);
+  } catch (e) {
+    log(`Refresh failed: ${e.message}`, 'fail');
+  }
+}
+
+// ── Connection ───────────────────────────────────────────────────────────────
+
+window.initSession = async function() {
+  try {
+    log('Connecting...', 'info');
+    const resp = await mcpRequest({
+      jsonrpc: '2.0', id: ++requestId, method: 'initialize',
+      params: {
+        protocolVersion: '2025-03-26',
+        capabilities: {},
+        clientInfo: { name: 'test-harness-visual', version: '1.0.0' },
+      },
+    });
+
+    if (resp.status !== 200) {
+      log(`Connection failed: HTTP ${resp.status}`, 'fail');
+      return;
+    }
+
+    await mcpRequest({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+    document.getElementById('connStatus').className = 'status connected';
+    document.getElementById('sessionInfo').textContent = sessionId?.slice(0, 8) + '...';
+    log(`Connected: ${sessionId}`, 'pass');
+
+    await refreshScene();
+  } catch (e) {
+    log(`Error: ${e.message}`, 'fail');
+    document.getElementById('connStatus').className = 'status disconnected';
+  }
+};
+
+// ── Logging ──────────────────────────────────────────────────────────────────
+
+function log(msg, cls = '') {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  line.className = `log-line ${cls}`;
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+
+window.clearLog = function() {
+  document.getElementById('log').innerHTML = '';
+};
+
+// ── Quick Actions ────────────────────────────────────────────────────────────
+
+window.quickBuild = async function() {
+  log('Building perimeter wall...', 'info');
+  const bricks = [];
+  const colors = ['#cc0000', '#0055bf', '#ffd700', '#00852b'];
+  const BP = 48; // baseplate size in studs
+  const brickLen = 4; // brick_2x4 is 2 wide x 4 long
+  const brickW = 2;
+  let ci = 0;
+
+  // Front wall (Z=0, bricks along X)
+  for (let x = 0; x < BP; x += brickLen) {
+    bricks.push({ typeId: 'brick_2x4', x, y: 0, z: 0, rotation: '0', color: colors[ci++ % 4] });
+  }
+  // Back wall (Z=46, bricks along X)
+  for (let x = 0; x < BP; x += brickLen) {
+    bricks.push({ typeId: 'brick_2x4', x, y: 0, z: BP - brickW, rotation: '0', color: colors[ci++ % 4] });
+  }
+  // Left wall (X=0, bricks along Z, rotated 90)
+  for (let z = brickW; z < BP - brickW; z += brickLen) {
+    bricks.push({ typeId: 'brick_2x4', x: 0, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
+  }
+  // Right wall (X=46, bricks along Z, rotated 90)
+  for (let z = brickW; z < BP - brickW; z += brickLen) {
+    bricks.push({ typeId: 'brick_2x4', x: BP - brickW, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
+  }
+
+  try {
+    const resp = await callTool('brick_build_structure', { bricks });
+    const p = parseToolPayload(resp.body);
+    updateSceneDisplay(p);
+    log(`Built perimeter: ${p?.scene?.bricks?.length} bricks, v${p?.version}`, 'pass');
+  } catch (e) { log(`Build failed: ${e.message}`, 'fail'); }
+};
+
+window.quickAdd = async function() {
+  const colors = ['#cc0000', '#0055bf', '#ffd700', '#00852b', '#f2f3f2', '#fe8a18'];
+  const color = colors[Math.floor(Math.random() * colors.length)];
+  try {
+    const { payload: p, x, y, z } = await addBrickSafe('brick_2x4', color);
+    updateSceneDisplay(p);
+    log(`Added at (${x},${y},${z}) -> ${p?.scene?.bricks?.length} bricks, v${p?.version}`, 'pass');
+  } catch (e) { log(`Add failed: ${e.message}`, 'fail'); }
+};
+
+window.quickTower = async function() {
+  log('Building tower (6 bricks)...', 'info');
+  const bricks = [];
+  const colors = ['#cc0000', '#0055bf', '#ffd700', '#00852b', '#fe8a18', '#923978'];
+  for (let i = 0; i < 6; i++) {
+    bricks.push({
+      typeId: 'brick_2x2', x: 24, y: i * 3, z: 24,
+      rotation: '0', color: colors[i],
+    });
+  }
+  try {
+    const resp = await callTool('brick_build_structure', { bricks });
+    const p = parseToolPayload(resp.body);
+    updateSceneDisplay(p);
+    log(`Tower: ${p?.scene?.bricks?.length} bricks, v${p?.version}`, 'pass');
+  } catch (e) { log(`Tower failed: ${e.message}`, 'fail'); }
+};
+
+window.quickClear = async function() {
+  log('Clearing...', 'info');
+  try {
+    const resp = await callTool('brick_clear_scene');
+    const p = parseToolPayload(resp.body);
+    updateSceneDisplay(p);
+    log(`Cleared -> v${p?.version}`, 'pass');
+  } catch (e) { log(`Clear failed: ${e.message}`, 'fail'); }
+};
+
+// ── Manual Tool Call ─────────────────────────────────────────────────────────
+
+window.callManualTool = async function() {
+  const name = document.getElementById('toolName').value;
+  let args;
+  try { args = JSON.parse(document.getElementById('toolArgs').value); }
+  catch (e) { log(`Invalid JSON: ${e.message}`, 'fail'); return; }
+
+  log(`Calling ${name}...`, 'info');
+  try {
+    const resp = await callTool(name, args);
+    const payload = parseToolPayload(resp.body);
+
+    const resultEl = document.getElementById('manualResult');
+    resultEl.style.display = 'block';
+    resultEl.textContent = JSON.stringify(payload, null, 2);
+
+    if (payload) {
+      updateSceneDisplay(payload);
+      log(`${name} -> v${payload.version ?? '?'}, ${payload.scene?.bricks?.length ?? '?'} bricks`, 'pass');
+    } else {
+      log(`${name} -> ${JSON.stringify(resp.body).slice(0, 200)}`, 'warn');
+    }
+  } catch (e) { log(`${name} failed: ${e.message}`, 'fail'); }
+};
+
+// ── Collision-aware add helper ────────────────────────────────────────────────
+
+// Tries to add a brick, retrying with a new random position on collision (up to maxRetries).
+// Fetches the scene to compute stacking Y before each attempt.
+async function addBrickSafe(typeId, color, maxRetries = 10) {
+  const def = BRICK_CATALOG[typeId];
+  if (!def) throw new Error(`Unknown type: ${typeId}`);
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // Get current scene for stacking calculation
+    let bricks = [];
+    try {
+      const sr = await callTool('brick_get_scene');
+      bricks = parseToolPayload(sr.body)?.scene?.bricks ?? [];
+    } catch { /* fallback empty */ }
+
+    const x = Math.floor(Math.random() * (48 - def.studsX));
+    const z = Math.floor(Math.random() * (48 - def.studsZ));
+
+    // Find highest Y at this position to stack on top
+    let topY = 0;
+    for (const b of bricks) {
+      const bd = BRICK_CATALOG[b.typeId];
+      if (!bd) continue;
+      let bsx = bd.studsX, bsz = bd.studsZ;
+      if (b.rotation === 90 || b.rotation === 270) [bsx, bsz] = [bsz, bsx];
+      if (x < b.position.x + bsx && x + def.studsX > b.position.x &&
+          z < b.position.z + bsz && z + def.studsZ > b.position.z) {
+        const bt = b.position.y + bd.heightUnits;
+        if (bt > topY) topY = bt;
+      }
+    }
+
+    const resp = await callTool('brick_add', { typeId, x, y: topY, z, color });
+    const p = parseToolPayload(resp.body);
+    if (p?.error) {
+      log(`  Retry ${attempt + 1}: collision at (${x},${topY},${z}), trying new spot...`, 'dim');
+      continue;
+    }
+    return { payload: p, x, y: topY, z };
+  }
+  throw new Error(`Failed to place brick after ${maxRetries} attempts`);
+}
+
+// ── Automated Tests ──────────────────────────────────────────────────────────
+
+let testsPassed = 0, testsFailed = 0;
+
+function assert(condition, msg) {
+  if (condition) { testsPassed++; log(`  PASS: ${msg}`, 'pass'); }
+  else { testsFailed++; log(`  FAIL: ${msg}`, 'fail'); }
+}
+
+const tests = {
+  async build3() {
+    log('Test: Build 3 bricks', 'header');
+    const resp = await callTool('brick_build_structure', {
+      bricks: [
+        { typeId: 'brick_2x4', x: 0, y: 0, z: 0, color: '#cc0000' },
+        { typeId: 'brick_2x4', x: 0, y: 0, z: 4, color: '#0055bf' },
+        { typeId: 'brick_2x4', x: 0, y: 0, z: 8, color: '#00852b' },
+      ],
+    });
+    const p = parseToolPayload(resp.body);
+    updateSceneDisplay(p);
+    assert(p?.scene?.bricks?.length === 3, `Expected 3 bricks, got ${p?.scene?.bricks?.length}`);
+  },
+  async renderCheck() {
+    log('Test: Render scene (state persist)', 'header');
+    const resp = await callTool('brick_render_scene');
+    const p = parseToolPayload(resp.body);
+    updateSceneDisplay(p);
+    assert((p?.scene?.bricks?.length ?? 0) > 0, `Expected bricks, got ${p?.scene?.bricks?.length ?? 0}`);
+  },
+  async addBrick() {
+    log('Test: Add single brick', 'header');
+    const before = parseToolPayload((await callTool('brick_get_scene')).body);
+    const n = before?.scene?.bricks?.length ?? 0;
+    const { payload: p, x, y, z } = await addBrickSafe('brick_1x1', '#ffd700');
+    log(`  Placed at (${x},${y},${z})`, 'dim');
+    updateSceneDisplay(p);
+    assert(p?.scene?.bricks?.length === n + 1, `Expected ${n + 1}, got ${p?.scene?.bricks?.length}`);
+  },
+  async addAnother() {
+    log('Test: Add 2nd brick (both persist)', 'header');
+    const before = parseToolPayload((await callTool('brick_get_scene')).body);
+    const n = before?.scene?.bricks?.length ?? 0;
+    const { payload: p, x, y, z } = await addBrickSafe('brick_1x1', '#fe8a18');
+    log(`  Placed at (${x},${y},${z})`, 'dim');
+    updateSceneDisplay(p);
+    assert(p?.scene?.bricks?.length === n + 1, `Expected ${n + 1}, got ${p?.scene?.bricks?.length}`);
+  },
+  async pollCheck() {
+    log('Test: Poll scene', 'header');
+    const resp = await callTool('brick_poll_scene', { knownVersion: 0 });
+    const p = parseToolPayload(resp.body);
+    updateSceneDisplay(p);
+    assert((p?.scene?.bricks?.length ?? 0) > 0, `Poll returned ${p?.scene?.bricks?.length ?? 0} bricks`);
+  },
+  async clear() {
+    log('Test: Clear scene', 'header');
+    const resp = await callTool('brick_clear_scene');
+    const p = parseToolPayload(resp.body);
+    updateSceneDisplay(p);
+    assert(p?.scene?.bricks?.length === 0, `Expected 0, got ${p?.scene?.bricks?.length}`);
+  },
+};
+
+window.runTest = async function(name) {
+  if (!sessionId) { log('Not connected.', 'warn'); return; }
+  try { await tests[name](); } catch (e) { log(`Error: ${e.message}`, 'fail'); }
+};
+
+window.runAllTests = async function() {
+  if (!sessionId) { log('Not connected.', 'warn'); return; }
+  const btn = document.getElementById('btnRunAll');
+  btn.disabled = true;
+  testsPassed = 0; testsFailed = 0;
+  log('=== Running all tests ===', 'header');
+
+  try { await callTool('brick_clear_scene'); reconcileScene([]); log('Pre-clear done', 'dim'); }
+  catch (e) { log(`Pre-clear failed: ${e.message}`, 'fail'); }
+
+  for (const name of ['build3', 'renderCheck', 'addBrick', 'addAnother', 'pollCheck', 'clear']) {
+    try { await tests[name](); }
+    catch (e) { log(`"${name}" error: ${e.message}`, 'fail'); testsFailed++; }
+  }
+
+  log('', '');
+  if (testsFailed === 0) log(`All ${testsPassed} tests passed`, 'pass');
+  else log(`${testsPassed} passed, ${testsFailed} failed`, 'fail');
+  btn.disabled = false;
+};
+
+window.refreshScene = refreshScene;
+
+// ── Placement Mode ────────────────────────────────────────────────────────────
+
+let placementMode = false;
+let placeTypeId = 'brick_2x4';
+let placeColor = '#cc0000';
+let placeRotation = 0;
+let lastGridPos = null;
+let ghostMesh = null;
+let ghostKey = '';
+let pointerDownPos = null;
+
+const raycaster = new THREE.Raycaster();
+const pointerNDC = new THREE.Vector2();
+const cursorOverlay = document.getElementById('cursorOverlay');
+
+// ── Populate placement UI ────────────────────────────────────────────────────
+
+// Brick type dropdown
+const placeTypeSelect = document.getElementById('placeType');
+for (const typeId of Object.keys(BRICK_CATALOG)) {
+  const opt = document.createElement('option');
+  opt.value = typeId;
+  opt.textContent = typeId.replace('_', ' ');
+  placeTypeSelect.appendChild(opt);
+}
+placeTypeSelect.value = placeTypeId;
+placeTypeSelect.addEventListener('change', (e) => { placeTypeId = e.target.value; });
+
+// Color palette
+const paletteEl = document.getElementById('colorPalette');
+for (const c of DEFAULT_COLORS) {
+  const swatch = document.createElement('div');
+  swatch.className = 'color-swatch' + (c.hex === placeColor ? ' selected' : '');
+  swatch.style.background = c.hex;
+  swatch.title = c.name;
+  swatch.addEventListener('click', () => {
+    paletteEl.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('selected'));
+    swatch.classList.add('selected');
+    placeColor = c.hex;
+  });
+  paletteEl.appendChild(swatch);
+}
+
+// ── Client-side collision detection (ported from CollisionDetector.ts) ───────
+
+function getBrickAABB(brick) {
+  const { x, y, z } = brick.position;
+  const cat = BRICK_CATALOG[brick.typeId];
+  if (!cat) return null;
+  const isRotated = brick.rotation === 90 || brick.rotation === 270;
+  const sx = isRotated ? cat.studsZ : cat.studsX;
+  const sz = isRotated ? cat.studsX : cat.studsZ;
+  return { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
+}
+
+function aabbOverlap(a, b) {
+  return a.minX < b.maxX && a.maxX > b.minX &&
+         a.minY < b.maxY && a.maxY > b.minY &&
+         a.minZ < b.maxZ && a.maxZ > b.minZ;
+}
+
+function checkCollisionClient(bricks, typeId, x, y, z, rotation) {
+  const cat = BRICK_CATALOG[typeId];
+  if (!cat) return true;
+  const isRotated = rotation === 90 || rotation === 270;
+  const sx = isRotated ? cat.studsZ : cat.studsX;
+  const sz = isRotated ? cat.studsX : cat.studsZ;
+  const candidate = { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
+  for (const existing of bricks) {
+    const eb = getBrickAABB(existing);
+    if (eb && aabbOverlap(candidate, eb)) return true;
+  }
+  return false;
+}
+
+function isInBounds(typeId, x, z, rotation) {
+  const cat = BRICK_CATALOG[typeId];
+  if (!cat) return false;
+  const isRotated = rotation === 90 || rotation === 270;
+  const sx = isRotated ? cat.studsZ : cat.studsX;
+  const sz = isRotated ? cat.studsX : cat.studsZ;
+  return x >= 0 && z >= 0 && x + sx <= BASEPLATE_SIZE && z + sz <= BASEPLATE_SIZE;
+}
+
+// ── Two-stage raycasting ─────────────────────────────────────────────────────
+
+function updatePointer(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointerNDC.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointerNDC.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function raycastPlacement(event) {
+  updatePointer(event);
+  raycaster.setFromCamera(pointerNDC, camera);
+
+  // Stage 1: raycast brick meshes for stacking
+  const brickMeshes = Array.from(brickMeshMap.values());
+  if (brickMeshes.length > 0) {
+    const hits = raycaster.intersectObjects(brickMeshes, false);
+    for (const hit of hits) {
+      if (hit.face && hit.face.normal.y > 0.5) {
+        // Top face hit — find which brick this mesh belongs to
+        let hitBrick = null;
+        for (const [id, mesh] of brickMeshMap) {
+          if (mesh === hit.object) {
+            hitBrick = currentBricks.find(b => b.id === id);
+            break;
+          }
+        }
+        if (hitBrick) {
+          const hitCat = BRICK_CATALOG[hitBrick.typeId];
+          if (hitCat) {
+            const stackY = hitBrick.position.y + hitCat.heightUnits;
+            const gridX = Math.floor(hit.point.x / STUD_SIZE);
+            const gridZ = Math.floor(hit.point.z / STUD_SIZE);
+            return { gridX, gridY: stackY, gridZ };
+          }
+        }
+      }
+    }
+  }
+
+  // Stage 2: raycast ground plane
+  const groundHits = raycaster.intersectObject(groundPlane, false);
+  if (groundHits.length > 0) {
+    const p = groundHits[0].point;
+    return { gridX: Math.floor(p.x / STUD_SIZE), gridY: 0, gridZ: Math.floor(p.z / STUD_SIZE) };
+  }
+
+  return null;
+}
+
+// ── Ghost preview ────────────────────────────────────────────────────────────
+
+function createGhostMesh(typeId, rotation) {
+  const cat = BRICK_CATALOG[typeId];
+  if (!cat) return null;
+
+  const catType = cat.category;
+  let studsX = cat.studsX, studsZ = cat.studsZ;
+  if (catType !== CAT.CORNER && catType !== CAT.SLOPE && (rotation === 90 || rotation === 270)) [studsX, studsZ] = [studsZ, studsX];
+
+  const w = studsX * STUD_SIZE;
+  const h = cat.heightUnits * PLATE_HEIGHT;
+  const d = studsZ * STUD_SIZE;
+
+  const parts = [];
+
+  if (catType === CAT.SLOPE) {
+    // 45° slope ghost: flat top at back, slope face on front (pentagon profile)
+    const slopeRun = d / 2;
+    const frontWallTop = h / 2 - slopeRun;
+    const slopeShape = new THREE.Shape();
+    slopeShape.moveTo(-d / 2, -h / 2);
+    slopeShape.lineTo( d / 2, -h / 2);
+    slopeShape.lineTo( d / 2,  h / 2);
+    slopeShape.lineTo( 0,      h / 2);
+    slopeShape.lineTo(-d / 2,  frontWallTop);
+    slopeShape.closePath();
+    const slopeGeo = new THREE.ExtrudeGeometry(slopeShape, { depth: w, bevelEnabled: false });
+    slopeGeo.rotateY(Math.PI / 2);
+    slopeGeo.translate(-w / 2, 0, 0);
+    parts.push(slopeGeo);
+  } else if (catType === CAT.CORNER) {
+    // L-shaped body: notch at +X,+Z before rotation
+    const arm1 = new THREE.BoxGeometry(w, h, d / 2);
+    arm1.translate(0, 0, -d / 4);
+    parts.push(arm1);
+    const arm2 = new THREE.BoxGeometry(w / 2, h, d / 2);
+    arm2.translate(-w / 4, 0, d / 4);
+    parts.push(arm2);
+  } else {
+    parts.push(new THREE.BoxGeometry(w, h, d));
+  }
+
+  const studGeo = new THREE.CylinderGeometry(STUD_DIAMETER / 2, STUD_DIAMETER / 2, STUD_HEIGHT, 8);
+  for (let sx = 0; sx < studsX; sx++) {
+    for (let sz = 0; sz < studsZ; sz++) {
+      if (catType === CAT.CORNER && sx === studsX - 1 && sz === studsZ - 1) continue;
+      if (catType === CAT.SLOPE && sz !== 0) continue;
+      const s = studGeo.clone();
+      s.translate(
+        (sx - studsX / 2 + 0.5) * STUD_SIZE,
+        h / 2 + STUD_HEIGHT / 2,
+        (sz - studsZ / 2 + 0.5) * STUD_SIZE,
+      );
+      parts.push(s);
+    }
+  }
+
+  const merged = mergeGeometries(parts.map(g => g.toNonIndexed()));
+
+  // Corner + slope pieces need actual geometry rotation
+  if ((catType === CAT.CORNER || catType === CAT.SLOPE) && rotation !== 0) {
+    merged.rotateY(-rotation * Math.PI / 180);
+  }
+
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0x00ff00,
+    transparent: true,
+    opacity: 0.45,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(merged, mat);
+  mesh.renderOrder = 999;
+  return mesh;
+}
+
+function updateGhost(gridX, gridY, gridZ, valid) {
+  const newKey = `${placeTypeId}_${placeRotation}`;
+  if (newKey !== ghostKey || !ghostMesh) {
+    if (ghostMesh) { scene.remove(ghostMesh); ghostMesh.geometry.dispose(); ghostMesh.material.dispose(); }
+    ghostMesh = createGhostMesh(placeTypeId, placeRotation);
+    ghostKey = newKey;
+    if (ghostMesh) scene.add(ghostMesh);
+  }
+  if (!ghostMesh) return;
+
+  const cat = BRICK_CATALOG[placeTypeId];
+  let studsX = cat.studsX, studsZ = cat.studsZ;
+  if (placeRotation === 90 || placeRotation === 270) [studsX, studsZ] = [studsZ, studsX];
+
+  const w = studsX * STUD_SIZE;
+  const h = cat.heightUnits * PLATE_HEIGHT;
+  const d = studsZ * STUD_SIZE;
+
+  ghostMesh.position.set(
+    gridX * STUD_SIZE + w / 2,
+    gridY * PLATE_HEIGHT + h / 2,
+    gridZ * STUD_SIZE + d / 2,
+  );
+
+  ghostMesh.material.color.setHex(valid ? 0x00ff00 : 0xff0000);
+  ghostMesh.visible = true;
+}
+
+function hideGhost() {
+  if (ghostMesh) ghostMesh.visible = false;
+}
+
+// ── Event handlers ───────────────────────────────────────────────────────────
+
+function onPlacementPointerMove(e) {
+  const hit = raycastPlacement(e);
+  if (!hit) { hideGhost(); cursorOverlay.style.display = 'none'; return; }
+
+  lastGridPos = hit;
+  const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
+  const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
+  const valid = inBounds && !collision;
+
+  updateGhost(hit.gridX, hit.gridY, hit.gridZ, valid);
+
+  cursorOverlay.style.display = 'block';
+  cursorOverlay.className = 'cursor-overlay ' + (valid ? 'valid' : 'blocked');
+  cursorOverlay.textContent = `Grid: (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}) | ${placeTypeId} ${placeRotation}° | ${valid ? 'VALID' : 'BLOCKED'}`;
+}
+
+function onPlacementPointerDown(e) {
+  pointerDownPos = { x: e.clientX, y: e.clientY };
+}
+
+async function onPlacementPointerUp(e) {
+  if (!pointerDownPos) return;
+  const dx = e.clientX - pointerDownPos.x;
+  const dy = e.clientY - pointerDownPos.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  pointerDownPos = null;
+
+  // Click vs drag: distance < 5px = click
+  if (dist >= 5) return;
+
+  const hit = raycastPlacement(e);
+  if (!hit) return;
+
+  const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
+  const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
+  if (!inBounds || collision) {
+    log(`Placement blocked at (${hit.gridX}, ${hit.gridY}, ${hit.gridZ})`, 'warn');
+    return;
+  }
+
+  try {
+    const resp = await callTool('brick_add', {
+      typeId: placeTypeId,
+      x: hit.gridX,
+      y: hit.gridY,
+      z: hit.gridZ,
+      color: placeColor,
+      rotation: String(placeRotation),
+    });
+    const payload = parseToolPayload(resp.body);
+    if (payload?.error) {
+      log(`Server rejected: ${payload.error}`, 'fail');
+    } else {
+      updateSceneDisplay(payload);
+      log(`Placed ${placeTypeId} at (${hit.gridX},${hit.gridY},${hit.gridZ})`, 'pass');
+    }
+  } catch (err) {
+    log(`Place failed: ${err.message}`, 'fail');
+  }
+}
+
+function onPlacementKeyDown(e) {
+  if (e.key === 'r' || e.key === 'R') {
+    e.preventDefault();
+    rotatePlacement();
+  } else if (e.key === 'Escape') {
+    if (placementMode) togglePlacement();
+  }
+}
+
+// ── Toggle placement mode ────────────────────────────────────────────────────
+
+window.togglePlacement = function() {
+  placementMode = !placementMode;
+  const btn = document.getElementById('btnPlacement');
+  const canvas = renderer.domElement;
+
+  if (placementMode) {
+    btn.textContent = 'Disable Placement';
+    btn.classList.add('active');
+    canvas.style.cursor = 'crosshair';
+    canvas.addEventListener('pointermove', onPlacementPointerMove);
+    canvas.addEventListener('pointerdown', onPlacementPointerDown);
+    canvas.addEventListener('pointerup', onPlacementPointerUp);
+    document.addEventListener('keydown', onPlacementKeyDown);
+  } else {
+    btn.textContent = 'Enable Placement';
+    btn.classList.remove('active');
+    canvas.style.cursor = '';
+    canvas.removeEventListener('pointermove', onPlacementPointerMove);
+    canvas.removeEventListener('pointerdown', onPlacementPointerDown);
+    canvas.removeEventListener('pointerup', onPlacementPointerUp);
+    document.removeEventListener('keydown', onPlacementKeyDown);
+    hideGhost();
+    cursorOverlay.style.display = 'none';
+    lastGridPos = null;
+  }
+};
+
+window.rotatePlacement = function() {
+  placeRotation = (placeRotation + 90) % 360;
+  document.getElementById('rotDisplay').textContent = placeRotation + '°';
+};
+
+// ── Prefill tool args ────────────────────────────────────────────────────────
+const argTemplates = {
+  brick_render_scene: '{}',
+  brick_build_structure: JSON.stringify({
+    bricks: [
+      { typeId: 'brick_2x4', x: 0, y: 0, z: 0, color: '#cc0000' },
+      { typeId: 'brick_2x4', x: 0, y: 0, z: 4, color: '#0055bf' },
+    ],
+  }, null, 2),
+  brick_get_scene: '{}',
+  brick_add: JSON.stringify({ typeId: 'brick_2x4', x: 10, y: 0, z: 10, color: '#ffd700' }, null, 2),
+  brick_remove: JSON.stringify({ brickId: '<paste brick id>' }, null, 2),
+  brick_clear_scene: '{}',
+  brick_poll_scene: JSON.stringify({ knownVersion: 0 }, null, 2),
+  brick_export_scene: JSON.stringify({ format: 'summary' }, null, 2),
+};
+
+document.getElementById('toolName').addEventListener('change', (e) => {
+  document.getElementById('toolArgs').value = argTemplates[e.target.value] || '{}';
+});
+</script>
+</body>
+</html>
