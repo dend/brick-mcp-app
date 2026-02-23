@@ -25,21 +25,23 @@ export function applyBrickTransform(mesh: THREE.Object3D, brick: BrickInstance, 
   const worldY = brick.position.y * PLATE_HEIGHT;
   const worldZ = brick.position.z * STUD_SIZE;
 
-  // Reset transform — pivot around brick center for rotation
   mesh.position.set(0, 0, 0);
   mesh.rotation.set(0, 0, 0);
 
-  // The geometry is built at origin. We rotate around the brick's center.
-  const cx = (brickType.studsX * STUD_SIZE) / 2;
-  const cz = (brickType.studsZ * STUD_SIZE) / 2;
-
+  const w = brickType.studsX * STUD_SIZE;
+  const d = brickType.studsZ * STUD_SIZE;
   const rotRad = -(brick.rotation * Math.PI) / 180;
-
-  // Translate to world position, rotating geometry around its center
   const cos = Math.cos(rotRad);
   const sin = Math.sin(rotRad);
-  const offsetX = cx - (cx * cos - cz * sin);
-  const offsetZ = cz - (cx * sin + cz * cos);
+
+  // Geometry is corner-origin [0,w]×[0,d]. After rotation, find the min corner
+  // of the rotated bounding box and offset so it aligns with (worldX, worldZ).
+  const rx1 = w * cos;
+  const rx2 = d * sin;
+  const offsetX = -Math.min(0, rx1, rx2, rx1 + rx2);
+  const rz1 = -w * sin;
+  const rz2 = d * cos;
+  const offsetZ = -Math.min(0, rz1, rz2, rz1 + rz2);
 
   mesh.rotation.y = rotRad;
   mesh.position.set(worldX + offsetX, worldY, worldZ + offsetZ);

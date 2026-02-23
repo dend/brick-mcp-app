@@ -250,6 +250,10 @@ CRITICAL: You must call brick_render_scene before your first brick_place call. P
 - Valid ranges: X 0–${BASEPLATE_SIZE - 1}, Z 0–${BASEPLATE_SIZE - 1}, Y 0+
 - Rotation: "0", "90", "180", or "270" (string)
 - Bricks CANNOT float — they must sit on the baseplate (Y=0) or on top of another brick
+- ALL positions are relative to the baseplate. A brick's entire footprint (position + size) must stay within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. Out-of-bounds placements are rejected.
+- A brick at position (x, z) with studsX=2, studsZ=4 occupies x to x+2, z to z+4. So the maximum valid x for that brick is ${BASEPLATE_SIZE - 2}, and the maximum valid z is ${BASEPLATE_SIZE - 4}.
+- IMPORTANT: Every brick_place response includes a "footprint" showing the brick's exact occupied area: {minX, maxX, minZ, maxZ, topY}. Use footprint.maxX/maxZ to know where to place the NEXT brick adjacent to it. Use footprint.topY for the Y value of the next layer on top.
+- brick_get_scene also returns footprints for every brick. ALWAYS read footprints to position new bricks — never calculate positions from scratch when existing bricks have footprints.
 
 ## Size & Scale Reference
 
@@ -277,53 +281,76 @@ Narrow builds are things like a single tower, a lamppost, or a small character m
 Red #cc0000 · Blue #0055bf · Green #237841 · Yellow #f2cd37 · White #ffffff · Black #1b2a34
 Orange #fe8a18 · Brown #583927 · Tan #e4cd9e · Dark grey #6b5a5a · Light grey #9ba19d · Dark blue #0a3463
 
+## Footprints
+
+Every brick_place response and brick_get_scene response includes a "footprint" for each brick:
+  { minX, maxX, minZ, maxZ, topY }
+
+This tells you the exact area the brick occupies on the baseplate after rotation is applied.
+- minX/maxX: the brick spans from minX to maxX along the X axis
+- minZ/maxZ: the brick spans from minZ to maxZ along the Z axis
+- topY: the top of the brick — use this as the Y value for stacking a brick on top
+
+Use footprints to position new bricks. Do NOT calculate positions manually — read the footprint from the response.
+- To place a brick adjacent along X: use the previous brick's footprint.maxX as the new brick's x
+- To place a brick adjacent along Z: use the previous brick's footprint.maxZ as the new brick's z
+- To stack on top: use the previous brick's footprint.topY as the new brick's y
+
+Example: you place a brick_2x4 at (10, 0, 10) with rotation "90". The response includes:
+  footprint: { minX: 10, maxX: 14, minZ: 10, maxZ: 12, topY: 3 }
+To place the next brick to the right: x=14 (footprint.maxX)
+To place a brick in front: z=12 (footprint.maxZ)
+To stack on top: y=3 (footprint.topY)
+
 ## Examples
 
 Each brick_place call places ONE brick. Build bottom-up — always place supports before the bricks on top.
 
 ### Wall (4 bricks tall)
-Same X and Z, increment Y by heightUnits (3 for standard bricks):
+Place first brick, then use footprint.topY for each subsequent layer:
   brick_place(typeId="brick_1x8", x=10, y=0, z=10, color="#cc0000")
-  brick_place(typeId="brick_1x8", x=10, y=3, z=10, color="#cc0000")
-  brick_place(typeId="brick_1x8", x=10, y=6, z=10, color="#cc0000")
-  brick_place(typeId="brick_1x8", x=10, y=9, z=10, color="#cc0000")
+    → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:3}
+  brick_place(typeId="brick_1x8", x=10, y=3, z=10, color="#cc0000")  ← y=3 from topY
+    → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:6}
+  brick_place(typeId="brick_1x8", x=10, y=6, z=10, color="#cc0000")  ← y=6 from topY
+  brick_place(typeId="brick_1x8", x=10, y=9, z=10, color="#cc0000")  ← y=9 from topY
 
 ### Placing side by side along Z
-For a brick_2x4 (studsX=2, studsZ=4), the next brick along Z starts at z+4:
+Use footprint.maxZ from each response for the next brick's z:
   brick_place(typeId="brick_2x4", x=10, y=0, z=10, color="#cc0000")
-  brick_place(typeId="brick_2x4", x=10, y=0, z=14, color="#0055bf")
-  brick_place(typeId="brick_2x4", x=10, y=0, z=18, color="#237841")
+    → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
+  brick_place(typeId="brick_2x4", x=10, y=0, z=14, color="#0055bf")  ← z=14 from maxZ
+    → footprint: {minX:10, maxX:12, minZ:14, maxZ:18, topY:3}
+  brick_place(typeId="brick_2x4", x=10, y=0, z=18, color="#237841")  ← z=18 from maxZ
 
 ### Placing side by side along X
-Same brick, the next along X starts at x+2 (studsX=2):
+Use footprint.maxX from each response for the next brick's x:
   brick_place(typeId="brick_2x4", x=10, y=0, z=10, color="#cc0000")
-  brick_place(typeId="brick_2x4", x=12, y=0, z=10, color="#0055bf")
-  brick_place(typeId="brick_2x4", x=14, y=0, z=10, color="#237841")
+    → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
+  brick_place(typeId="brick_2x4", x=12, y=0, z=10, color="#0055bf")  ← x=12 from maxX
+  brick_place(typeId="brick_2x4", x=14, y=0, z=10, color="#237841")  ← x=14 from maxX
 
-### Interlocking wall (staggered for strength)
-Offset bricks by half their length on alternating rows:
-  Row 0 (y=0): z=10, z=14
-  Row 1 (y=3): z=12, z=16 (offset by 2)
-  Row 2 (y=6): z=10, z=14 (back to original)
-
-### Rotation swaps X/Z dimensions
-  brick_2x4 at rotation "0":  occupies X=2, Z=4 → next along X: x+2, next along Z: z+4
-  brick_2x4 at rotation "90": occupies X=4, Z=2 → next along X: x+4, next along Z: z+2
+### Rotation changes footprint — always read it
+  brick_2x4 at rotation "0":  footprint maxX = x+2, maxZ = z+4
+  brick_2x4 at rotation "90": footprint maxX = x+4, maxZ = z+2  (swapped!)
 
 ## Rules
 - Build BOTTOM-UP: y=0 first, then y=3, y=6, etc. Floating bricks are rejected.
 - Use exact typeId values from brick_get_available. Wrong IDs are rejected.
 - Each brick_place returns success with the brick ID, or an error explaining why it failed. Read the error and adjust.
 - Rotation swaps dimensions — account for this when tiling.
+- ALL bricks must fit within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. The brick's full footprint (position + studs size) must not exceed x=${BASEPLATE_SIZE - 1} or z=${BASEPLATE_SIZE - 1}. Out-of-bounds placements are rejected.
+- BEFORE placing a new brick, call brick_get_scene to see where existing bricks are. Position new bricks RELATIVE to what's already placed — adjacent to, on top of, or next to existing bricks. Never guess positions from scratch when there are already bricks in the scene.
 
 ## Building Strategy
-1. Plan the footprint first — lay the ground floor (Y=0)
-2. Build upward layer by layer — each layer's Y = previous Y + heightUnits
-3. Place one brick at a time. Read each response — if placement fails, adjust and retry.
-4. Alternate brick offsets between rows for realistic interlocking
-5. Use plates (heightUnits=1) for thin details, trim, and floors
-6. Use slopes for rooflines — studs are only on the flat side
-7. Build in sections: foundation → walls → roof
+1. Call brick_get_scene FIRST to see what's already built. Always place new bricks relative to existing ones.
+2. Plan the footprint first — lay the ground floor (Y=0)
+3. Build upward layer by layer — each layer's Y = previous Y + heightUnits
+4. Place one brick at a time. Read each response — if placement fails, adjust and retry.
+5. Alternate brick offsets between rows for realistic interlocking
+6. Use plates (heightUnits=1) for thin details, trim, and floors
+7. Use slopes for rooflines — studs are only on the flat side
+8. Build in sections: foundation → walls → roof
 
 ## Best Practices
 - Work at a scale that makes sense for the detail level you want. Larger scale gives more room for realism.
@@ -472,9 +499,21 @@ export function createServer(): McpServer {
         };
       }
       scene.bricks.push(instance);
+      const aabb = getBrickAABB(instance, brickType);
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          placed: { id: instance.id, typeId, position: { x, y, z }, rotation: instance.rotation, color: instance.color },
+          placed: {
+            id: instance.id,
+            typeId,
+            position: { x, y, z },
+            rotation: instance.rotation,
+            color: instance.color,
+            footprint: {
+              minX: aabb.minX, maxX: aabb.maxX,
+              minZ: aabb.minZ, maxZ: aabb.maxZ,
+              topY: aabb.maxY,
+            },
+          },
           totalBricks: scene.bricks.length,
         }) }],
       };
@@ -486,11 +525,28 @@ export function createServer(): McpServer {
   server.registerTool(
     "brick_get_scene",
     {
-      description: "Returns the current scene state with all placed bricks.",
+      description: "Returns the current scene state with all placed bricks and their footprints. Use this before placing new bricks to see where existing bricks are.",
       annotations: { readOnlyHint: true },
     },
     async () => {
-      return sceneResult();
+      const bricksWithFootprints = scene.bricks.map(b => {
+        const bt = findBrickType(b.typeId);
+        if (!bt) return b;
+        const aabb = getBrickAABB(b, bt);
+        return {
+          ...b,
+          footprint: {
+            minX: aabb.minX, maxX: aabb.maxX,
+            minZ: aabb.minZ, maxZ: aabb.maxZ,
+            topY: aabb.maxY,
+          },
+        };
+      });
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          scene: { ...scene, bricks: bricksWithFootprints },
+        }) }],
+      };
     },
   );
 

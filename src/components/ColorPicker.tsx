@@ -12,10 +12,11 @@ export default function ColorPicker({ selectedColor, onColorChange, visible }: C
   return (
     <div style={{
       position: 'absolute',
-      bottom: 8,
-      left: '50%',
-      transform: 'translateX(-50%)',
-      display: 'flex',
+      right: 170,
+      top: '50%',
+      transform: 'translateY(-50%)',
+      display: 'grid',
+      gridTemplateColumns: 'repeat(2, 28px)',
       gap: 4,
       background: 'rgba(0,0,0,0.7)',
       borderRadius: 8,

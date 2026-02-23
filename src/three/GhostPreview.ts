@@ -38,13 +38,18 @@ export class GhostPreview {
     const mat = this.mesh.material as THREE.MeshStandardMaterial;
     mat.color.set(isValid ? 0x00ff00 : 0xff0000);
 
-    const cx = (brickType.studsX * STUD_SIZE) / 2;
-    const cz = (brickType.studsZ * STUD_SIZE) / 2;
+    const w = brickType.studsX * STUD_SIZE;
+    const d = brickType.studsZ * STUD_SIZE;
     const rotRad = -(rotation * Math.PI) / 180;
     const cos = Math.cos(rotRad);
     const sin = Math.sin(rotRad);
-    const offsetX = cx - (cx * cos - cz * sin);
-    const offsetZ = cz - (cx * sin + cz * cos);
+
+    const rx1 = w * cos;
+    const rx2 = d * sin;
+    const offsetX = -Math.min(0, rx1, rx2, rx1 + rx2);
+    const rz1 = -w * sin;
+    const rz2 = d * cos;
+    const offsetZ = -Math.min(0, rz1, rz2, rz1 + rz2);
 
     this.mesh.position.set(
       gridX * STUD_SIZE + offsetX,

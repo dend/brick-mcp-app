@@ -81,9 +81,7 @@ export default function SceneInfo({ app, sceneData, onToolResult }: SceneInfoPro
       </button>
       <button
         onClick={() => {
-          if (confirm('Clear all bricks?')) {
-            callTool('brick_clear_scene', {});
-          }
+          callTool('brick_clear_scene', {});
         }}
         style={{
           background: 'rgba(255,80,80,0.3)',

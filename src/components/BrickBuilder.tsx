@@ -103,7 +103,7 @@ export default function BrickBuilder({ app, sceneData, cameraState, onToolResult
       {mode === 'place' && (
         <div style={{
           position: 'absolute',
-          bottom: 48,
+          bottom: 8,
           left: '50%',
           transform: 'translateX(-50%)',
           background: 'rgba(0,0,0,0.7)',
