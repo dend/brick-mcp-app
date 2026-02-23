@@ -256,6 +256,16 @@ const BRICK_CATALOG = {
   plate_2x4:   { category: CAT.PLATE,   studsX: 2, studsZ: 4, heightUnits: 1 },
   plate_2x6:   { category: CAT.PLATE,   studsX: 2, studsZ: 6, heightUnits: 1 },
   plate_4x4:   { category: CAT.PLATE,   studsX: 4, studsZ: 4, heightUnits: 1 },
+  plate_6x6:   { category: CAT.PLATE,   studsX: 6, studsZ: 6, heightUnits: 1 },
+  plate_8x8:   { category: CAT.PLATE,   studsX: 8, studsZ: 8, heightUnits: 1 },
+  plate_12x4:  { category: CAT.PLATE,   studsX: 12, studsZ: 4, heightUnits: 1 },
+  plate_12x6:  { category: CAT.PLATE,   studsX: 12, studsZ: 6, heightUnits: 1 },
+  plate_12x8:  { category: CAT.PLATE,   studsX: 12, studsZ: 8, heightUnits: 1 },
+  plate_16x1:  { category: CAT.PLATE,   studsX: 16, studsZ: 1, heightUnits: 1 },
+  plate_16x2:  { category: CAT.PLATE,   studsX: 16, studsZ: 2, heightUnits: 1 },
+  plate_16x4:  { category: CAT.PLATE,   studsX: 16, studsZ: 4, heightUnits: 1 },
+  plate_16x6:  { category: CAT.PLATE,   studsX: 16, studsZ: 6, heightUnits: 1 },
+  plate_16x8:  { category: CAT.PLATE,   studsX: 16, studsZ: 8, heightUnits: 1 },
   slope_2x2:   { category: CAT.SLOPE,   studsX: 2, studsZ: 2, heightUnits: 3 },
   technic_1x2: { category: CAT.TECHNIC, studsX: 1, studsZ: 2, heightUnits: 3 },
   technic_1x4: { category: CAT.TECHNIC, studsX: 1, studsZ: 4, heightUnits: 3 },
@@ -1175,41 +1185,67 @@ function raycastPlacement(event) {
   updatePointer(event);
   raycaster.setFromCamera(pointerNDC, camera);
 
-  // Stage 1: raycast brick meshes for stacking
+  let gridX, gridY, gridZ;
+
+  // Stage 1: raycast brick meshes — any hit = stack on top
   const brickMeshes = Array.from(brickMeshMap.values());
   if (brickMeshes.length > 0) {
     const hits = raycaster.intersectObjects(brickMeshes, false);
-    for (const hit of hits) {
-      if (hit.face && hit.face.normal.y > 0.5) {
-        // Top face hit — find which brick this mesh belongs to
-        let hitBrick = null;
-        for (const [id, mesh] of brickMeshMap) {
-          if (mesh === hit.object) {
-            hitBrick = currentBricks.find(b => b.id === id);
-            break;
-          }
+    if (hits.length > 0) {
+      const hit = hits[0];
+      let hitBrick = null;
+      for (const [id, mesh] of brickMeshMap) {
+        if (mesh === hit.object) {
+          hitBrick = currentBricks.find(b => b.id === id);
+          break;
         }
-        if (hitBrick) {
-          const hitCat = BRICK_CATALOG[hitBrick.typeId];
-          if (hitCat) {
-            const stackY = hitBrick.position.y + hitCat.heightUnits;
-            const gridX = Math.floor(hit.point.x / STUD_SIZE);
-            const gridZ = Math.floor(hit.point.z / STUD_SIZE);
-            return { gridX, gridY: stackY, gridZ };
-          }
+      }
+      if (hitBrick) {
+        const hitCat = BRICK_CATALOG[hitBrick.typeId];
+        if (hitCat) {
+          gridX = Math.floor(hit.point.x / STUD_SIZE);
+          gridY = hitBrick.position.y + hitCat.heightUnits;
+          gridZ = Math.floor(hit.point.z / STUD_SIZE);
         }
       }
     }
   }
 
-  // Stage 2: raycast ground plane
-  const groundHits = raycaster.intersectObject(groundPlane, false);
-  if (groundHits.length > 0) {
-    const p = groundHits[0].point;
-    return { gridX: Math.floor(p.x / STUD_SIZE), gridY: 0, gridZ: Math.floor(p.z / STUD_SIZE) };
+  // Stage 2: raycast ground plane (only if no brick hit)
+  if (gridX === undefined) {
+    const groundHits = raycaster.intersectObject(groundPlane, false);
+    if (groundHits.length > 0) {
+      const p = groundHits[0].point;
+      gridX = Math.floor(p.x / STUD_SIZE);
+      gridY = 0;
+      gridZ = Math.floor(p.z / STUD_SIZE);
+    } else {
+      return null;
+    }
   }
 
-  return null;
+  // Auto-elevate: if the new brick's footprint overlaps any existing brick,
+  // place on top of the highest overlapping brick
+  const placeCat = BRICK_CATALOG[placeTypeId];
+  if (placeCat) {
+    const isRotated = placeRotation === 90 || placeRotation === 270;
+    const sx = isRotated ? placeCat.studsZ : placeCat.studsX;
+    const sz = isRotated ? placeCat.studsX : placeCat.studsZ;
+    for (const existing of currentBricks) {
+      const et = BRICK_CATALOG[existing.typeId];
+      if (!et) continue;
+      const eRot = existing.rotation === 90 || existing.rotation === 270;
+      const esx = eRot ? et.studsZ : et.studsX;
+      const esz = eRot ? et.studsX : et.studsZ;
+      if (gridX < existing.position.x + esx && gridX + sx > existing.position.x &&
+          gridZ < existing.position.z + esz && gridZ + sz > existing.position.z) {
+        const topY = existing.position.y + et.heightUnits;
+        if (topY > gridY) gridY = topY;
+      }
+    }
+  }
+
+  return { gridX, gridY, gridZ };
 }
 
 // ── Ghost preview ────────────────────────────────────────────────────────────

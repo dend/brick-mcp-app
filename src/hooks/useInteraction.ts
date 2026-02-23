@@ -85,13 +85,21 @@ export function useInteraction({
     const raycast = raycastRef.current;
     const bricks = sceneData?.bricks ?? [];
 
-    function getGridHit(event: PointerEvent) {
+    function getGridHit(
+      event: PointerEvent,
+      bt: BrickType | null = selectedBrickType,
+      rot: 0 | 90 | 180 | 270 = rotation,
+      excludeId?: string,
+    ) {
       raycast.updatePointer(event, canvas);
       return raycast.raycastGrid(
         handle!.sceneManager.camera,
         handle!.gridHelper.raycastPlane,
         handle!.reconciler.getBrickMeshes(),
-        selectedBrickType,
+        bt,
+        rot,
+        bricks,
+        excludeId,
       );
     }
 
@@ -126,12 +134,12 @@ export function useInteraction({
           lastGridRef.current = null;
         }
       } else if (mode === 'move' && dragRef.current) {
-        const hit = getGridHit(event);
+        const dragBrick = bricks.find((b) => b.id === dragRef.current!.brickId);
+        if (!dragBrick) return;
+        const bt = getBrickType(dragBrick.typeId);
+        if (!bt) return;
+        const hit = getGridHit(event, bt, dragBrick.rotation, dragRef.current!.brickId);
         if (hit && ghostRef.current) {
-          const dragBrick = bricks.find((b) => b.id === dragRef.current!.brickId);
-          if (!dragBrick) return;
-          const bt = getBrickType(dragBrick.typeId);
-          if (!bt) return;
           const valid =
             isInBounds(hit.gridX, hit.gridZ, bt, dragBrick.rotation) &&
             checkSupportClient(bricks, dragBrick.typeId, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation) &&

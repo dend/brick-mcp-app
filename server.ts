@@ -250,6 +250,28 @@ CRITICAL: You must call brick_render_scene before your first brick_place call. P
 - Rotation: "0", "90", "180", or "270" (string)
 - Bricks CANNOT float — they must sit on the baseplate (Y=0) or on top of another brick
 
+## Size & Scale Reference
+
+Height is measured in bricks (1 brick = 3 plates = 3 Y units).
+| Category       | Height        | Real-world approx |
+|----------------|---------------|-------------------|
+| Short          | 1–10 bricks   | up to ~9.6 cm     |
+| Medium         | 11–30 bricks  | ~10–28 cm         |
+| Tall           | 31–60 bricks  | ~29–57 cm         |
+| Tower/Skyscraper | 60+ bricks | 57 cm+            |
+
+Short builds sit flat on a table and are viewed mostly from above (vehicles, small vignettes, garden scenes). Medium builds are eye-catching at table height and viewed straight-on. Tall builds demand vertical presence and often need internal reinforcement.
+
+Width is measured in studs (1 stud = 8 mm).
+| Category | Width       | Real-world approx |
+|----------|-------------|-------------------|
+| Narrow   | 1–8 studs   | up to ~6.4 cm     |
+| Medium   | 9–24 studs  | ~7–19 cm          |
+| Wide     | 25–48 studs | ~20–38 cm         |
+| Massive  | 48+ studs   | 38 cm+            |
+
+Narrow builds are things like a single tower, a lamppost, or a small character model. Medium is the sweet spot for most standalone builds — a small house, a vehicle, a diorama scene. Wide and massive are dioramas, modular-style buildings, and layout sections.
+
 ## Colors
 Red #cc0000 · Blue #0055bf · Green #237841 · Yellow #f2cd37 · White #ffffff · Black #1b2a34
 Orange #fe8a18 · Brown #583927 · Tan #e4cd9e · Dark grey #6b5a5a · Light grey #9ba19d · Dark blue #0a3463
@@ -441,22 +463,21 @@ export function createServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const byCategory: Record<string, BrickDefinition[]> = {};
+      const byCategory: Record<string, { typeId: string; name: string; studsX: number; studsZ: number; heightUnits: number }[]> = {};
       for (const bt of BRICK_CATALOG) {
-        (byCategory[bt.category] ??= []).push(bt);
+        (byCategory[bt.category] ??= []).push({
+          typeId: bt.id,
+          name: bt.name,
+          studsX: bt.studsX,
+          studsZ: bt.studsZ,
+          heightUnits: bt.heightUnits,
+        });
       }
-      let text = "# Available Brick Types\n\nUse these exact typeId values in brick_place. Do NOT guess IDs.\n\n";
-      for (const [cat, bricks] of Object.entries(byCategory)) {
-        text += `## ${cat.charAt(0).toUpperCase() + cat.slice(1)}s\n`;
-        text += `| typeId | Name | X (width) | Z (depth) | Y (height) |\n`;
-        text += `|--------|------|-----------|-----------|------------|\n`;
-        for (const bt of bricks) {
-          text += `| ${bt.id} | ${bt.name} | ${bt.studsX} | ${bt.studsZ} | ${bt.heightUnits} |\n`;
-        }
-        text += `\n`;
-      }
-      text += `Rotation swaps X and Z dimensions. E.g. brick_2x4 at rotation "90" occupies X=4, Z=2.\n`;
-      return { content: [{ type: "text" as const, text }] };
+      const result = {
+        catalog: byCategory,
+        note: "Use exact typeId values in brick_place. Rotation swaps X and Z dimensions (e.g. brick_2x4 at rotation 90 occupies X=4, Z=2).",
+      };
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     },
   );
 
@@ -543,11 +564,13 @@ export function createServer(): McpServer {
           await new Promise(resolve => setTimeout(resolve, BRICK_DELAY_MS));
         }
       }
-      let msg = `Placed ${added} of ${bricks.length} bricks.`;
-      if (skipped.length > 0) {
-        msg += `\nSkipped ${skipped.length}:\n${skipped.join("\n")}`;
-      }
-      return sceneResult(msg);
+      const result = {
+        ...scenePayload(),
+        placed: added,
+        total: bricks.length,
+        ...(skipped.length > 0 ? { skipped } : {}),
+      };
+      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     },
   );
 
@@ -599,7 +622,7 @@ export function createServer(): McpServer {
       const count = scene.bricks.length;
       if (count === 0) {
         return {
-          content: [{ type: "text" as const, text: `Scene '${scene.name}': empty (no bricks).` }],
+          content: [{ type: "text" as const, text: JSON.stringify({ name: scene.name, brickCount: 0 }) }],
         };
       }
       const colorCounts: Record<string, number> = {};
@@ -615,11 +638,13 @@ export function createServer(): McpServer {
         minY = Math.min(minY, aabb.minY); maxY = Math.max(maxY, aabb.maxY);
         minZ = Math.min(minZ, aabb.minZ); maxZ = Math.max(maxZ, aabb.maxZ);
       }
-      const colorSummary = Object.entries(colorCounts)
-        .map(([hex, n]) => `${n} ${hex}`)
-        .join(", ");
-      const text = `Scene '${scene.name}': ${count} bricks. Dimensions: ${maxX - minX}×${maxY - minY}×${maxZ - minZ} studs. Colors: ${colorSummary}.`;
-      return { content: [{ type: "text" as const, text }] };
+      const summary = {
+        name: scene.name,
+        brickCount: count,
+        dimensions: { x: maxX - minX, y: maxY - minY, z: maxZ - minZ },
+        colors: colorCounts,
+      };
+      return { content: [{ type: "text" as const, text: JSON.stringify(summary) }] };
     },
   );
 

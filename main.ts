@@ -68,12 +68,13 @@ export async function startStreamableHTTPServer(
     });
 
     // Clean up session when transport closes
+    // NOTE: Do NOT call server.close() here — it calls transport.close()
+    // which fires onclose again, causing infinite recursion / stack overflow.
     transport.onclose = () => {
       const sid = transport.sessionId;
       if (sid) {
         sessions.delete(sid);
       }
-      server.close().catch(() => {});
     };
 
     try {
@@ -107,9 +108,9 @@ export async function startStreamableHTTPServer(
 
   const shutdown = () => {
     console.log("\nShutting down...");
-    // Clean up all sessions
+    // Close servers (which close their transports via protocol.close())
+    // Don't call transport.close() separately — server.close() does it.
     for (const [, session] of sessions) {
-      session.transport.close().catch(() => {});
       session.server.close().catch(() => {});
     }
     sessions.clear();
