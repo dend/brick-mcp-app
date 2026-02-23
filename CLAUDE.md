@@ -28,17 +28,9 @@ npm run serve        # Start server (dev mode with tsx)
 npm run dev          # Watch + serve concurrently
 ```
 
-## Project structure
+## Architecture
 
-```
-server.ts            # MCP server factory, tool registrations, scene state
-main.ts              # HTTP/stdio entry point
-src/
-  mcp-app.tsx        # React entry, MCP App lifecycle
-  types.ts           # Shared types (BrickInstance, SceneData, etc.)
-  constants.ts       # Dimensions, colors, modes
-  engine/            # Scene reconciler, collision detection, brick catalog
-  three/             # Three.js scene management, geometry, raycasting
-  hooks/             # React hooks for Three.js and interaction
-  components/        # UI panels (toolbar, brick selector, color picker)
-```
+- Scene state is **module-level** (shared across MCP sessions) — the host creates separate sessions for LLM and app iframe
+- The UI polls `brick_get_scene` every 1s to pick up LLM-initiated changes
+- `brick_place` returns footprint data (`{minX, maxX, minZ, maxZ, topY}`) so the LLM can position bricks precisely
+- Only `brick_render_scene` has `resourceUri` — all other model tools use plain `server.registerTool` to avoid iframe reloads
