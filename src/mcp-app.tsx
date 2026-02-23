@@ -142,6 +142,18 @@ function BrickApp() {
     app.requestDisplayMode({ mode: 'fullscreen' }).catch(() => {});
   }, [app]);
 
+  // Poll server for scene changes from LLM tool calls
+  useEffect(() => {
+    if (!app) return;
+    const interval = setInterval(async () => {
+      try {
+        const result = await app.callServerTool({ name: "brick_get_scene", arguments: {} });
+        handleToolResult(result);
+      } catch { /* ignore */ }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [app, handleToolResult]);
+
   // Update model context when scene changes
   useEffect(() => {
     if (!app || !sceneData) return;

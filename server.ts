@@ -5,6 +5,7 @@ import {
 } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -411,6 +412,11 @@ GOOD — accounting for the swap when tiling:
   return sheet;
 }
 
+// Shared scene state — the host creates separate MCP sessions for the LLM
+// and the app iframe, so per-closure state won't be visible across both.
+// Module-level state ensures both sessions read/write the same scene.
+let scene: SceneData = { name: "Untitled", bricks: [] };
+
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "Brick Builder",
@@ -418,9 +424,6 @@ export function createServer(): McpServer {
   }, {
     instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Do not guess brick type IDs.`,
   });
-
-  // Per-session scene state
-  let scene: SceneData = { name: "Untitled", bricks: [] };
 
   function scenePayload(message?: string) {
     return {
@@ -437,8 +440,6 @@ export function createServer(): McpServer {
   }
 
   // ── Tool 1: brick_read_me (model-only, no frame) ───────────────────────
-  // Like Excalidraw's read_me — returns comprehensive cheat sheet with
-  // available brick types, coordinate system, colors, and building tips.
 
   server.registerTool(
     "brick_read_me",
@@ -452,7 +453,6 @@ export function createServer(): McpServer {
   );
 
   // ── Tool 2: brick_get_available (model-only, no frame) ────────────────
-  // Returns the full brick catalog with all types and their metadata.
 
   server.registerTool(
     "brick_get_available",
@@ -493,19 +493,12 @@ export function createServer(): McpServer {
     async () => sceneResult("Scene rendered"),
   );
 
-  // ── Tool 3: brick_place (model-facing, streams to app via resourceUri) ──
-  // Registered with registerAppTool + resourceUri so the host sends
-  // ontoolinputpartial events to the app as the LLM streams the bricks
-  // JSON string. This gives live building visualization without polling.
-  // The bricks param is a JSON array string (like Excalidraw's elements)
-  // so partial chunks can be parsed incrementally.
+  // ── Tool 4: brick_place (model-facing, no UI metadata) ────────────────
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "brick_place",
     {
-      title: "Place Bricks",
-      description: "Place one or more bricks. Bricks stream into the viewer live as you generate them. Call brick_render_scene first to open the viewer. Call brick_read_me for format reference.",
+      description: "Place one or more bricks. Call brick_render_scene first to open the viewer. Call brick_read_me for format reference.",
       inputSchema: {
         bricks: z.union([
           z.string(),
@@ -524,7 +517,6 @@ export function createServer(): McpServer {
         ),
         clearFirst: z.boolean().optional().default(false).describe("Clear scene before placing"),
       },
-      _meta: { ui: { resourceUri } },
     },
     async ({ bricks: bricksInput, clearFirst }) => {
       let rawBricks: Array<{ typeId: string; x: number; y: number; z: number; rotation?: string; color?: string }>;
@@ -544,7 +536,6 @@ export function createServer(): McpServer {
 
       if (clearFirst) {
         scene.bricks = [];
-  
       }
       // Sort bottom-up so supports are placed before the bricks that need them
       const sorted = [...rawBricks].sort((a, b) => (a.y ?? 0) - (b.y ?? 0));
@@ -591,7 +582,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 4: brick_get_scene (model-only, no frame) ──────────────────────
+  // ── Tool 5: brick_get_scene (model-only, no frame) ──────────────────────
 
   server.registerTool(
     "brick_get_scene",
@@ -599,30 +590,27 @@ export function createServer(): McpServer {
       description: "Returns the current scene state with all placed bricks.",
       annotations: { readOnlyHint: true },
     },
-    async () => sceneResult(),
+    async () => {
+      return sceneResult();
+    },
   );
 
-  // ── Tool 5: brick_clear_scene (model-facing, streams result to app) ──
+  // ── Tool 6: brick_clear_scene (model-facing, no UI metadata) ──────────
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "brick_clear_scene",
     {
-      title: "Clear Scene",
       description: "Remove all bricks from the scene.",
-      inputSchema: {},
       annotations: { destructiveHint: true },
-      _meta: { ui: { resourceUri } },
     },
     async () => {
       const count = scene.bricks.length;
       scene.bricks = [];
-
       return sceneResult(`Cleared ${count} bricks`);
     },
   );
 
-  // ── Tool 6: brick_export_scene (no frame) ────────────────────────────────
+  // ── Tool 7: brick_export_scene (no frame) ────────────────────────────────
 
   server.registerTool(
     "brick_export_scene",
@@ -669,7 +657,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 7: brick_add (app-only) ────────────────────────────────────────
+  // ── Tool 8: brick_add (app-only) ────────────────────────────────────────
 
   registerAppTool(
     server,
@@ -685,7 +673,7 @@ export function createServer(): McpServer {
         rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation degrees"),
         color: z.string().optional().default("#cc0000").describe("Hex color"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ typeId, x, y, z, rotation, color }) => {
       const brickType = findBrickType(typeId);
@@ -710,12 +698,11 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): collision — overlaps an existing brick` }) }], isError: true };
       }
       scene.bricks.push(instance);
-
       return sceneResult(`Added ${brickType.name} at (${x}, ${y}, ${z})`);
     },
   );
 
-  // ── Tool 8: brick_remove (app-only) ─────────────────────────────────────
+  // ── Tool 9: brick_remove (app-only) ─────────────────────────────────────
 
   registerAppTool(
     server,
@@ -726,7 +713,7 @@ export function createServer(): McpServer {
       inputSchema: {
         brickId: z.string().describe("ID of the brick to remove"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ brickId }) => {
       const idx = scene.bricks.findIndex((b) => b.id === brickId);
@@ -754,7 +741,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 9: brick_move (app-only) ───────────────────────────────────────
+  // ── Tool 10: brick_move (app-only) ───────────────────────────────────────
 
   registerAppTool(
     server,
@@ -768,7 +755,7 @@ export function createServer(): McpServer {
         y: z.number().int().min(0).describe("New Y position"),
         z: z.number().int().describe("New Z position"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ brickId, x, y, z }) => {
       const brick = scene.bricks.find((b) => b.id === brickId);
@@ -811,7 +798,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 10: brick_rotate (app-only) ────────────────────────────────────
+  // ── Tool 11: brick_rotate (app-only) ────────────────────────────────────
 
   registerAppTool(
     server,
@@ -823,7 +810,7 @@ export function createServer(): McpServer {
         brickId: z.string().describe("ID of the brick to rotate"),
         rotation: z.enum(["0", "90", "180", "270"]).describe("New rotation in degrees"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ brickId, rotation }) => {
       const brick = scene.bricks.find((b) => b.id === brickId);
@@ -866,7 +853,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 11: brick_paint (app-only) ─────────────────────────────────────
+  // ── Tool 12: brick_paint (app-only) ─────────────────────────────────────
 
   registerAppTool(
     server,
@@ -878,7 +865,7 @@ export function createServer(): McpServer {
         brickId: z.string().describe("ID of the brick to paint"),
         color: z.string().describe("New hex color"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ brickId, color }) => {
       const brick = scene.bricks.find((b) => b.id === brickId);
@@ -886,12 +873,11 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". It may have been removed. Call brick_get_scene to see current bricks.` }) }], isError: true };
       }
       brick.color = color;
-
       return sceneResult(`Painted ${brick.typeId} at (${brick.position.x}, ${brick.position.y}, ${brick.position.z}) → ${color}`);
     },
   );
 
-  // ── Tool 12: brick_set_camera (app-only) ────────────────────────────────
+  // ── Tool 13: brick_set_camera (app-only) ────────────────────────────────
 
   registerAppTool(
     server,
@@ -907,7 +893,7 @@ export function createServer(): McpServer {
         targetY: z.number().optional().default(0).describe("Look-at Y"),
         targetZ: z.number().optional().default(0).describe("Look-at Z"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ posX, posY, posZ, targetX, targetY, targetZ }) => {
       const payload = {
@@ -922,7 +908,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 13: brick_import_scene (app-only) ──────────────────────────────
+  // ── Tool 14: brick_import_scene (app-only) ──────────────────────────────
 
   registerAppTool(
     server,
@@ -933,7 +919,7 @@ export function createServer(): McpServer {
       inputSchema: {
         sceneJson: z.string().describe("Scene JSON string"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ sceneJson }) => {
       try {
@@ -955,7 +941,6 @@ export function createServer(): McpServer {
           valid.push(brick);
         }
         scene = { name: imported.name, bricks: valid };
-  
         const msg = `Imported scene '${scene.name}' with ${valid.length} bricks` +
           (dropped > 0 ? ` (dropped ${dropped} invalid/floating/colliding bricks)` : "");
         return sceneResult(msg);
@@ -965,7 +950,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 14: brick_set_scene_name (app-only) ────────────────────────────
+  // ── Tool 15: brick_set_scene_name (app-only) ────────────────────────────
 
   registerAppTool(
     server,
@@ -976,16 +961,15 @@ export function createServer(): McpServer {
       inputSchema: {
         name: z.string().describe("New scene name"),
       },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async ({ name }) => {
       scene.name = name;
-
       return sceneResult(`Scene renamed to '${name}'`);
     },
   );
 
-  // ── Tool 15: brick_get_catalog (app-only) ───────────────────────────────
+  // ── Tool 16: brick_get_catalog (app-only) ───────────────────────────────
 
   registerAppTool(
     server,
@@ -994,7 +978,7 @@ export function createServer(): McpServer {
       title: "Get Brick Catalog",
       description: "Returns the available brick types for the UI.",
       inputSchema: {},
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
+      _meta: { ui: { visibility: ["app"] } },
     },
     async () => {
       return {

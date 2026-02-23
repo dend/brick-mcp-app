@@ -39,3 +39,4 @@ venv/
 coverage/
 .nyc_output/
 *.lcov
+NUL
