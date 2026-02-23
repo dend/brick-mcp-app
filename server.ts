@@ -279,122 +279,51 @@ Orange #fe8a18 · Brown #583927 · Tan #e4cd9e · Dark grey #6b5a5a · Light gre
 
 ## Examples
 
+Each brick_place call places ONE brick. Build bottom-up — always place supports before the bricks on top.
+
 ### Wall (4 bricks tall)
 Same X and Z, increment Y by heightUnits (3 for standard bricks):
-\`\`\`json
-[
-  {"typeId":"brick_1x8","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x8","x":10,"y":3,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x8","x":10,"y":6,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x8","x":10,"y":9,"z":10,"rotation":"0","color":"#cc0000"}
-]
-\`\`\`
-
-### Interlocking wall (staggered for strength)
-Offset bricks by half their length on alternating rows. This is how real walls are built:
-\`\`\`json
-[
-  {"typeId":"brick_1x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x4","x":10,"y":0,"z":14,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x4","x":10,"y":3,"z":12,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x4","x":10,"y":3,"z":16,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x4","x":10,"y":6,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_1x4","x":10,"y":6,"z":14,"rotation":"0","color":"#cc0000"}
-]
-\`\`\`
-
-### Enclosed room (4 walls, 2 layers, interlocking corners)
-Layer 0: left & right walls use rot "0"/"180", front & back use rot "90".
-Layer 1 (Y=3): offset by 2 studs and swap rotations ("270" instead of "90") so corners interlock.
-\`\`\`json
-[
-  // Layer 0 — left wall (X=10, rot "0", Z goes 10,14,18,22)
-  {"typeId":"brick_2x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":10,"y":0,"z":14,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":10,"y":0,"z":18,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":10,"y":0,"z":22,"rotation":"0","color":"#cc0000"},
-  // Layer 0 — right wall (X=22, rot "180", same Z positions)
-  {"typeId":"brick_2x4","x":22,"y":0,"z":10,"rotation":"180","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":22,"y":0,"z":14,"rotation":"180","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":22,"y":0,"z":18,"rotation":"180","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":22,"y":0,"z":22,"rotation":"180","color":"#cc0000"},
-  // Layer 0 — front wall (Z=24, rot "90", X goes 12,16,20)
-  {"typeId":"brick_2x4","x":12,"y":0,"z":24,"rotation":"90","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":16,"y":0,"z":24,"rotation":"90","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":20,"y":0,"z":24,"rotation":"90","color":"#cc0000"},
-  // Layer 0 — back wall (Z=10, rot "90", X goes 12,16,20)
-  {"typeId":"brick_2x4","x":12,"y":0,"z":10,"rotation":"90","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":16,"y":0,"z":10,"rotation":"90","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":20,"y":0,"z":10,"rotation":"90","color":"#cc0000"},
-  // Layer 1 — left wall (offset Z by 2: Z goes 12,16,20)
-  {"typeId":"brick_2x4","x":10,"y":3,"z":12,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":10,"y":3,"z":16,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":10,"y":3,"z":20,"rotation":"0","color":"#cc0000"},
-  // Layer 1 — right wall (offset Z by 2)
-  {"typeId":"brick_2x4","x":22,"y":3,"z":12,"rotation":"180","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":22,"y":3,"z":16,"rotation":"180","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":22,"y":3,"z":20,"rotation":"180","color":"#cc0000"},
-  // Layer 1 — front wall (rot "270", offset X: X goes 10,14,18,22 — covers corners!)
-  {"typeId":"brick_2x4","x":10,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":14,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":18,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":22,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
-  // Layer 1 — back wall (rot "270", offset X: covers corners)
-  {"typeId":"brick_2x4","x":10,"y":3,"z":10,"rotation":"270","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":14,"y":3,"z":10,"rotation":"270","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":18,"y":3,"z":10,"rotation":"270","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":22,"y":3,"z":10,"rotation":"270","color":"#cc0000"}
-]
-\`\`\`
-Key pattern: on layer 0, side walls (rot "0"/"180") cover the corners. On layer 1, front/back walls (rot "270") extend to cover the corners instead. This alternation locks the corners together.
-
-### Placing side by side along X
-For a brick_2x4 (X=2, Z=4), the next brick along X starts at x+2:
-\`\`\`json
-[
-  {"typeId":"brick_2x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":12,"y":0,"z":10,"rotation":"0","color":"#0055bf"},
-  {"typeId":"brick_2x4","x":14,"y":0,"z":10,"rotation":"0","color":"#237841"}
-]
-\`\`\`
+  brick_place(typeId="brick_1x8", x=10, y=0, z=10, color="#cc0000")
+  brick_place(typeId="brick_1x8", x=10, y=3, z=10, color="#cc0000")
+  brick_place(typeId="brick_1x8", x=10, y=6, z=10, color="#cc0000")
+  brick_place(typeId="brick_1x8", x=10, y=9, z=10, color="#cc0000")
 
 ### Placing side by side along Z
-Same brick — the next along Z starts at z+4 (the Z dimension):
-\`\`\`json
-[
-  {"typeId":"brick_2x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
-  {"typeId":"brick_2x4","x":10,"y":0,"z":14,"rotation":"0","color":"#0055bf"},
-  {"typeId":"brick_2x4","x":10,"y":0,"z":18,"rotation":"0","color":"#237841"}
-]
-\`\`\`
+For a brick_2x4 (studsX=2, studsZ=4), the next brick along Z starts at z+4:
+  brick_place(typeId="brick_2x4", x=10, y=0, z=10, color="#cc0000")
+  brick_place(typeId="brick_2x4", x=10, y=0, z=14, color="#0055bf")
+  brick_place(typeId="brick_2x4", x=10, y=0, z=18, color="#237841")
 
-## BAD vs GOOD Patterns
+### Placing side by side along X
+Same brick, the next along X starts at x+2 (studsX=2):
+  brick_place(typeId="brick_2x4", x=10, y=0, z=10, color="#cc0000")
+  brick_place(typeId="brick_2x4", x=12, y=0, z=10, color="#0055bf")
+  brick_place(typeId="brick_2x4", x=14, y=0, z=10, color="#237841")
 
-BAD — building top-down (bricks float and get rejected):
-  y:9 first, then y:6, y:3, y:0
-GOOD — building bottom-up (each brick lands on the one below):
-  y:0 first, then y:3, y:6, y:9
+### Interlocking wall (staggered for strength)
+Offset bricks by half their length on alternating rows:
+  Row 0 (y=0): z=10, z=14
+  Row 1 (y=3): z=12, z=16 (offset by 2)
+  Row 2 (y=6): z=10, z=14 (back to original)
 
-BAD — guessing brick IDs:
-  "typeId": "2x4_brick"   ← WRONG, will be skipped
-GOOD — using exact IDs from the catalog above:
-  "typeId": "brick_2x4"   ← correct
+### Rotation swaps X/Z dimensions
+  brick_2x4 at rotation "0":  occupies X=2, Z=4 → next along X: x+2, next along Z: z+4
+  brick_2x4 at rotation "90": occupies X=4, Z=2 → next along X: x+4, next along Z: z+2
 
-BAD — forgetting rotation swaps dimensions:
-  brick_2x4 at rotation "90" occupies X=4, Z=2 (swapped from X=2, Z=4)
-GOOD — accounting for the swap when tiling:
-  rotation "0": next along X is x+2, next along Z is z+4
-  rotation "90": next along X is x+4, next along Z is z+2
+## Rules
+- Build BOTTOM-UP: y=0 first, then y=3, y=6, etc. Floating bricks are rejected.
+- Use exact typeId values from brick_get_available. Wrong IDs are rejected.
+- Each brick_place returns success with the brick ID, or an error explaining why it failed. Read the error and adjust.
+- Rotation swaps dimensions — account for this when tiling.
 
 ## Building Strategy
 1. Plan the footprint first — lay the ground floor (Y=0)
 2. Build upward layer by layer — each layer's Y = previous Y + heightUnits
-3. Use brick_place with many bricks per call for efficiency (up to ~50 per call is fine)
+3. Place one brick at a time. Read each response — if placement fails, adjust and retry.
 4. Alternate brick offsets between rows for realistic interlocking
 5. Use plates (heightUnits=1) for thin details, trim, and floors
 6. Use slopes for rooflines — studs are only on the flat side
-7. Place bricks in bottom-up order within each brick_place call
-8. Build in sections or modules for large builds — foundation, then walls, then roof
+7. Build in sections: foundation → walls → roof
 
 ## Best Practices
 - Work at a scale that makes sense for the detail level you want. Larger scale gives more room for realism.
@@ -498,87 +427,57 @@ export function createServer(): McpServer {
   server.registerTool(
     "brick_place",
     {
-      description: "Place one or more bricks. Call brick_render_scene first to open the viewer. Call brick_read_me for format reference.",
+      description: "Place a single brick. Returns the placed brick with its ID, or an error explaining why placement failed. Call brick_render_scene first to open the viewer.",
       inputSchema: {
-        bricks: z.union([
-          z.string(),
-          z.array(
-            z.object({
-              typeId: z.string(),
-              x: z.number(),
-              y: z.number(),
-              z: z.number(),
-              rotation: z.string().optional(),
-              color: z.string().optional(),
-            }),
-          ),
-        ]).describe(
-          `Either a JSON array string of bricks, or a pre-parsed array of bricks. Each brick: {"typeId":"...","x":0,"y":0,"z":0,"rotation":"0","color":"#cc0000"}. rotation and color are optional.`,
-        ),
-        clearFirst: z.boolean().optional().default(false).describe("Clear scene before placing"),
+        typeId: z.string().describe("Brick type ID from brick_get_available"),
+        x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
+        y: z.number().int().min(0).describe("Y position in plate-height units (0 = baseplate, +3 per standard brick layer)"),
+        z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
+        rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation degrees. Swaps X/Z dimensions: e.g. brick_2x4 at 90° occupies X=4, Z=2"),
+        color: z.string().optional().default("#cc0000").describe("Hex color"),
       },
     },
-    async ({ bricks: bricksInput, clearFirst }) => {
-      let rawBricks: Array<{ typeId: string; x: number; y: number; z: number; rotation?: string; color?: string }>;
-      if (typeof bricksInput === "string") {
-        try {
-          rawBricks = JSON.parse(bricksInput);
-          if (!Array.isArray(rawBricks)) throw new Error("Expected array");
-        } catch (e) {
-          return {
-            content: [{ type: "text" as const, text: JSON.stringify({ error: `Invalid bricks JSON: ${e instanceof Error ? e.message : "parse error"}` }) }],
-            isError: true,
-          };
-        }
-      } else {
-        rawBricks = bricksInput;
-      }
-
-      if (clearFirst) {
-        scene.bricks = [];
-      }
-      // Sort bottom-up so supports are placed before the bricks that need them
-      const sorted = [...rawBricks].sort((a, b) => (a.y ?? 0) - (b.y ?? 0));
-      let added = 0;
-      const skipped: string[] = [];
-      for (let i = 0; i < sorted.length; i++) {
-        const b = sorted[i];
-        const brickType = findBrickType(b.typeId);
-        if (!brickType) {
-          skipped.push(`#${i} unknown typeId "${b.typeId}"`);
-          continue;
-        }
-        const instance: BrickInstance = {
-          id: generateId(),
-          typeId: b.typeId,
-          position: { x: b.x ?? 0, y: b.y ?? 0, z: b.z ?? 0 },
-          rotation: Number(b.rotation ?? "0") as 0 | 90 | 180 | 270,
-          color: b.color ?? "#cc0000",
+    async ({ typeId, x, y, z, rotation, color }) => {
+      const brickType = findBrickType(typeId);
+      if (!brickType) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Call brick_get_available to see valid type IDs.` }) }],
+          isError: true,
         };
-        const boundsError = checkBounds(instance, brickType);
-        if (boundsError) {
-          skipped.push(`#${i} ${b.typeId} at (${b.x},${b.y},${b.z}): ${boundsError}`);
-          continue;
-        }
-        if (!checkSupport(scene.bricks, instance, brickType)) {
-          skipped.push(`#${i} ${b.typeId} at (${b.x},${b.y},${b.z}): no support — must be on baseplate (Y=0) or on top of another brick`);
-          continue;
-        }
-        if (checkCollision(scene.bricks, instance, brickType)) {
-          skipped.push(`#${i} ${b.typeId} at (${b.x},${b.y},${b.z}): collision with existing brick`);
-          continue;
-        }
-        scene.bricks.push(instance);
-        added++;
       }
-
-      const result = {
-        ...scenePayload(),
-        placed: added,
-        total: rawBricks.length,
-        ...(skipped.length > 0 ? { skipped } : {}),
+      const instance: BrickInstance = {
+        id: generateId(),
+        typeId,
+        position: { x, y, z },
+        rotation: Number(rotation ?? "0") as 0 | 90 | 180 | 270,
+        color: color ?? "#cc0000",
       };
-      return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+      const boundsError = checkBounds(instance, brickType);
+      if (boundsError) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: boundsError, position: { x, y, z }, typeId }) }],
+          isError: true,
+        };
+      }
+      if (!checkSupport(scene.bricks, instance, brickType)) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: "No support — brick must be on baseplate (y=0) or resting on top of another brick", position: { x, y, z }, typeId }) }],
+          isError: true,
+        };
+      }
+      if (checkCollision(scene.bricks, instance, brickType)) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: "Collision — overlaps an existing brick", position: { x, y, z }, typeId }) }],
+          isError: true,
+        };
+      }
+      scene.bricks.push(instance);
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          placed: { id: instance.id, typeId, position: { x, y, z }, rotation: instance.rotation, color: instance.color },
+          totalBricks: scene.bricks.length,
+        }) }],
+      };
     },
   );
 
