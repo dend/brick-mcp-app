@@ -8,52 +8,15 @@ import type { ReadResourceResult } from "@modelcontextprotocol/sdk/types.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
+import type { BrickDefinition } from "./src/bricks/types.js";
+import { BRICK_CATALOG, getBrickType } from "./src/bricks/catalog.js";
 
 const DIST_DIR = import.meta.filename.endsWith(".ts")
   ? path.join(import.meta.dirname, "dist")
   : import.meta.dirname;
 
-// ── Brick catalog (duplicated server-side to avoid importing client code) ────
-
-interface BrickType {
-  id: string;
-  name: string;
-  category: "brick" | "plate" | "slope" | "technic" | "corner";
-  studsX: number;
-  studsZ: number;
-  heightUnits: number;
-}
-
-const BRICK_CATALOG: BrickType[] = [
-  { id: "brick_1x1", name: "1×1 Brick", category: "brick", studsX: 1, studsZ: 1, heightUnits: 3 },
-  { id: "brick_1x2", name: "1×2 Brick", category: "brick", studsX: 1, studsZ: 2, heightUnits: 3 },
-  { id: "brick_1x3", name: "1×3 Brick", category: "brick", studsX: 1, studsZ: 3, heightUnits: 3 },
-  { id: "brick_1x4", name: "1×4 Brick", category: "brick", studsX: 1, studsZ: 4, heightUnits: 3 },
-  { id: "brick_1x6", name: "1×6 Brick", category: "brick", studsX: 1, studsZ: 6, heightUnits: 3 },
-  { id: "brick_1x8", name: "1×8 Brick", category: "brick", studsX: 1, studsZ: 8, heightUnits: 3 },
-  { id: "brick_2x2", name: "2×2 Brick", category: "brick", studsX: 2, studsZ: 2, heightUnits: 3 },
-  { id: "brick_2x3", name: "2×3 Brick", category: "brick", studsX: 2, studsZ: 3, heightUnits: 3 },
-  { id: "brick_2x4", name: "2×4 Brick", category: "brick", studsX: 2, studsZ: 4, heightUnits: 3 },
-  { id: "brick_2x6", name: "2×6 Brick", category: "brick", studsX: 2, studsZ: 6, heightUnits: 3 },
-  { id: "brick_2x8", name: "2×8 Brick", category: "brick", studsX: 2, studsZ: 8, heightUnits: 3 },
-  { id: "plate_1x1", name: "1×1 Plate", category: "plate", studsX: 1, studsZ: 1, heightUnits: 1 },
-  { id: "plate_1x2", name: "1×2 Plate", category: "plate", studsX: 1, studsZ: 2, heightUnits: 1 },
-  { id: "plate_1x4", name: "1×4 Plate", category: "plate", studsX: 1, studsZ: 4, heightUnits: 1 },
-  { id: "plate_2x2", name: "2×2 Plate", category: "plate", studsX: 2, studsZ: 2, heightUnits: 1 },
-  { id: "plate_2x4", name: "2×4 Plate", category: "plate", studsX: 2, studsZ: 4, heightUnits: 1 },
-  { id: "plate_2x6", name: "2×6 Plate", category: "plate", studsX: 2, studsZ: 6, heightUnits: 1 },
-  { id: "plate_4x4", name: "4×4 Plate", category: "plate", studsX: 4, studsZ: 4, heightUnits: 1 },
-  { id: "slope_2x2", name: "2×2 Slope 45°", category: "slope", studsX: 2, studsZ: 2, heightUnits: 3 },
-  { id: "technic_1x2", name: "1×2 Technic", category: "technic", studsX: 1, studsZ: 2, heightUnits: 3 },
-  { id: "technic_1x4", name: "1×4 Technic", category: "technic", studsX: 1, studsZ: 4, heightUnits: 3 },
-  { id: "technic_1x6", name: "1×6 Technic", category: "technic", studsX: 1, studsZ: 6, heightUnits: 3 },
-  { id: "technic_1x8", name: "1×8 Technic", category: "technic", studsX: 1, studsZ: 8, heightUnits: 3 },
-  { id: "technic_2x4", name: "2×4 Technic", category: "technic", studsX: 2, studsZ: 4, heightUnits: 3 },
-  { id: "corner_2x2", name: "2×2 Corner", category: "corner", studsX: 2, studsZ: 2, heightUnits: 1 },
-];
-
-function findBrickType(typeId: string): BrickType | undefined {
-  return BRICK_CATALOG.find((bt) => bt.id === typeId);
+function findBrickType(typeId: string): BrickDefinition | undefined {
+  return getBrickType(typeId);
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -79,7 +42,7 @@ interface AABB {
 
 // ── Collision helpers ────────────────────────────────────────────────────────
 
-function getBrickAABB(brick: BrickInstance, brickType: BrickType): AABB {
+function getBrickAABB(brick: BrickInstance, brickType: BrickDefinition): AABB {
   const { x, y, z } = brick.position;
   const isRotated = brick.rotation === 90 || brick.rotation === 270;
   const sx = isRotated ? brickType.studsZ : brickType.studsX;
@@ -99,18 +62,57 @@ function aabbOverlap(a: AABB, b: AABB): boolean {
   );
 }
 
+// Block-out zone above the slope face — prevents placing bricks that would float
+// above the sloped portion where there is no flat surface.
+function getSlopeBlockoutAABB(brick: BrickInstance, brickType: BrickDefinition): AABB | null {
+  if (brickType.category !== "slope") return null;
+  const { x, y, z } = brick.position;
+  const isRotated = brick.rotation === 90 || brick.rotation === 270;
+  const sx = isRotated ? brickType.studsZ : brickType.studsX;
+  const sz = isRotated ? brickType.studsX : brickType.studsZ;
+  const slopeDepth = Math.ceil(brickType.studsZ / 2);
+  const topY = y + brickType.heightUnits;
+  const blockoutMaxY = topY + brickType.heightUnits;
+
+  // Slope geometry: low side at small Z in base orientation.
+  // After rotation the slope face direction changes.
+  switch (brick.rotation) {
+    case 0:   // slope faces -Z → front at small Z
+      return { minX: x, maxX: x + sx, minY: topY, maxY: blockoutMaxY, minZ: z, maxZ: z + slopeDepth };
+    case 90:  // slope faces +X → front at large X
+      return { minX: x + sx - slopeDepth, maxX: x + sx, minY: topY, maxY: blockoutMaxY, minZ: z, maxZ: z + sz };
+    case 180: // slope faces +Z → front at large Z
+      return { minX: x, maxX: x + sx, minY: topY, maxY: blockoutMaxY, minZ: z + sz - slopeDepth, maxZ: z + sz };
+    case 270: // slope faces -X → front at small X
+      return { minX: x, maxX: x + slopeDepth, minY: topY, maxY: blockoutMaxY, minZ: z, maxZ: z + sz };
+    default:
+      return null;
+  }
+}
+
 function checkCollision(
   bricks: BrickInstance[],
   newBrick: BrickInstance,
-  newType: BrickType,
+  newType: BrickDefinition,
   excludeId?: string,
 ): boolean {
   const newAABB = getBrickAABB(newBrick, newType);
+  const newBlockout = getSlopeBlockoutAABB(newBrick, newType);
   for (const existing of bricks) {
     if (excludeId && existing.id === excludeId) continue;
     const existType = findBrickType(existing.typeId);
     if (!existType) continue;
-    if (aabbOverlap(newAABB, getBrickAABB(existing, existType))) {
+    const existAABB = getBrickAABB(existing, existType);
+    if (aabbOverlap(newAABB, existAABB)) {
+      return true;
+    }
+    // New brick sits in an existing slope's block-out zone
+    const existBlockout = getSlopeBlockoutAABB(existing, existType);
+    if (existBlockout && aabbOverlap(newAABB, existBlockout)) {
+      return true;
+    }
+    // New slope's block-out zone covers an existing brick
+    if (newBlockout && aabbOverlap(newBlockout, existAABB)) {
       return true;
     }
   }
@@ -121,7 +123,7 @@ function checkCollision(
 
 const BASEPLATE_SIZE = 48;
 
-function checkBounds(brick: BrickInstance, brickType: BrickType): string | null {
+function checkBounds(brick: BrickInstance, brickType: BrickDefinition): string | null {
   const aabb = getBrickAABB(brick, brickType);
   if (aabb.minX < 0 || aabb.maxX > BASEPLATE_SIZE) {
     return `Brick extends outside baseplate on X axis (valid: 0–${BASEPLATE_SIZE - 1})`;

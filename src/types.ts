@@ -1,11 +1,6 @@
-export interface BrickType {
-  id: string;
-  name: string;
-  category: 'brick' | 'plate' | 'slope' | 'technic' | 'corner';
-  studsX: number;
-  studsZ: number;
-  heightUnits: number;
-}
+import type { BrickDefinition } from './bricks/types';
+export type { BrickDefinition };
+export type BrickType = BrickDefinition;
 
 export interface BrickInstance {
   id: string;
