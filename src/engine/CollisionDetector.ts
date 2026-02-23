@@ -21,30 +21,74 @@ function aabbOverlap(a: AABB, b: AABB): boolean {
   );
 }
 
-// Block-out zone above the slope face — prevents placing bricks that would float
-// above the sloped portion where there is no flat surface.
-function getSlopeBlockoutAABB(brick: BrickInstance, brickType: BrickType): AABB | null {
-  if (brickType.category !== 'slope') return null;
+// Compute world-space block-out AABBs from a brick's definition, applying rotation.
+function getBlockoutAABBs(brick: BrickInstance, brickType: BrickType): AABB[] {
+  if (!brickType.blockout?.length) return [];
   const { x, y, z } = brick.position;
-  const isRotated = brick.rotation === 90 || brick.rotation === 270;
-  const sx = isRotated ? brickType.studsZ : brickType.studsX;
-  const sz = isRotated ? brickType.studsX : brickType.studsZ;
-  const slopeDepth = Math.ceil(brickType.studsZ / 2);
+  const cx = brickType.studsX / 2;
+  const cz = brickType.studsZ / 2;
   const topY = y + brickType.heightUnits;
-  const blockoutMaxY = topY + brickType.heightUnits;
+  const rotRad = -(brick.rotation * Math.PI) / 180;
+  const cos = Math.cos(rotRad);
+  const sin = Math.sin(rotRad);
 
-  switch (brick.rotation) {
-    case 0:   // slope faces -Z → front at small Z
-      return { minX: x, maxX: x + sx, minY: topY, maxY: blockoutMaxY, minZ: z, maxZ: z + slopeDepth };
-    case 90:  // slope faces +X → front at large X
-      return { minX: x + sx - slopeDepth, maxX: x + sx, minY: topY, maxY: blockoutMaxY, minZ: z, maxZ: z + sz };
-    case 180: // slope faces +Z → front at large Z
-      return { minX: x, maxX: x + sx, minY: topY, maxY: blockoutMaxY, minZ: z + sz - slopeDepth, maxZ: z + sz };
-    case 270: // slope faces -X → front at small X
-      return { minX: x, maxX: x + slopeDepth, minY: topY, maxY: blockoutMaxY, minZ: z, maxZ: z + sz };
-    default:
-      return null;
+  return brickType.blockout.map(bo => {
+    // Rotate the 4 corners of the blockout footprint around the brick center
+    const corners: [number, number][] = [
+      [bo.minX - cx, bo.minZ - cz],
+      [bo.maxX - cx, bo.minZ - cz],
+      [bo.minX - cx, bo.maxZ - cz],
+      [bo.maxX - cx, bo.maxZ - cz],
+    ];
+    let rMinX = Infinity, rMaxX = -Infinity;
+    let rMinZ = Infinity, rMaxZ = -Infinity;
+    for (const [dx, dz] of corners) {
+      const rx = dx * cos - dz * sin + cx;
+      const rz = dx * sin + dz * cos + cz;
+      rMinX = Math.min(rMinX, rx);
+      rMaxX = Math.max(rMaxX, rx);
+      rMinZ = Math.min(rMinZ, rz);
+      rMaxZ = Math.max(rMaxZ, rz);
+    }
+    return {
+      minX: x + Math.round(rMinX),
+      maxX: x + Math.round(rMaxX),
+      minY: topY,
+      maxY: topY + bo.height,
+      minZ: z + Math.round(rMinZ),
+      maxZ: z + Math.round(rMaxZ),
+    };
+  });
+}
+
+// Does `topAABB` have stud support from the brick below (`bottomAABB`)?
+// Returns true if the top brick sits directly on the bottom brick's studs
+// (the part of the bottom brick's top face NOT covered by blockout zones).
+function hasStudSupport(
+  topAABB: AABB,
+  bottomAABB: AABB,
+  bottomBlockouts: AABB[],
+): boolean {
+  // Top brick must sit exactly on the bottom brick's top
+  if (topAABB.minY !== bottomAABB.maxY) return false;
+
+  // Compute XZ intersection of top brick and bottom brick footprint
+  const interMinX = Math.max(topAABB.minX, bottomAABB.minX);
+  const interMaxX = Math.min(topAABB.maxX, bottomAABB.maxX);
+  const interMinZ = Math.max(topAABB.minZ, bottomAABB.minZ);
+  const interMaxZ = Math.min(topAABB.maxZ, bottomAABB.maxZ);
+  if (interMinX >= interMaxX || interMinZ >= interMaxZ) return false;
+
+  // Check if the XZ intersection is entirely within any single blockout zone.
+  // If so, there are no studs in the overlap → no support.
+  for (const bo of bottomBlockouts) {
+    if (interMinX >= bo.minX && interMaxX <= bo.maxX &&
+        interMinZ >= bo.minZ && interMaxZ <= bo.maxZ) {
+      return false;
+    }
   }
+  // Intersection extends beyond blockout zones → studs exist → supported
+  return true;
 }
 
 export function checkCollisionClient(
@@ -67,7 +111,7 @@ export function checkCollisionClient(
     color: '#000000',
   };
   const candidateAABB = getBrickAABB(candidate, brickType);
-  const candidateBlockout = getSlopeBlockoutAABB(candidate, brickType);
+  const candidateBlockouts = getBlockoutAABBs(candidate, brickType);
 
   for (const existing of bricks) {
     if (excludeId && existing.id === excludeId) continue;
@@ -77,14 +121,20 @@ export function checkCollisionClient(
     if (aabbOverlap(candidateAABB, existAABB)) {
       return true;
     }
-    // Candidate sits in an existing slope's block-out zone
-    const existBlockout = getSlopeBlockoutAABB(existing, existType);
-    if (existBlockout && aabbOverlap(candidateAABB, existBlockout)) {
-      return true;
+    // Candidate sits in an existing brick's block-out zone
+    const existBlockouts = getBlockoutAABBs(existing, existType);
+    for (const bo of existBlockouts) {
+      if (aabbOverlap(candidateAABB, bo)) {
+        // Allow if candidate also connects to studs on the same brick
+        if (!hasStudSupport(candidateAABB, existAABB, existBlockouts)) return true;
+      }
     }
-    // Candidate slope's block-out zone covers an existing brick
-    if (candidateBlockout && aabbOverlap(candidateBlockout, existAABB)) {
-      return true;
+    // Candidate brick's block-out zone covers an existing brick
+    for (const bo of candidateBlockouts) {
+      if (aabbOverlap(bo, existAABB)) {
+        // Allow if existing brick connects to studs on the candidate
+        if (!hasStudSupport(existAABB, candidateAABB, candidateBlockouts)) return true;
+      }
     }
   }
   return false;

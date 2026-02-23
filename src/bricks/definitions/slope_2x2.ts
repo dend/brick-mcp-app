@@ -7,6 +7,9 @@ const slope_2x2: BrickDefinition = {
   studsX: 2,
   studsZ: 2,
   heightUnits: 3,
+  // Block-out above the angled face (large Z half in local coords).
+  // Studs are on the small Z half (flat top); stacking is allowed there.
+  blockout: [{ minX: 0, maxX: 2, minZ: 1, maxZ: 2, height: 3 }],
 };
 
 export default slope_2x2;
