@@ -421,12 +421,10 @@ export function createServer(): McpServer {
 
   // Per-session scene state
   let scene: SceneData = { name: "Untitled", bricks: [] };
-  let sceneVersion = 0;
 
   function scenePayload(message?: string) {
     return {
       scene,
-      version: sceneVersion,
       ...(message ? { message } : {}),
     };
   }
@@ -495,40 +493,63 @@ export function createServer(): McpServer {
     async () => sceneResult("Scene rendered"),
   );
 
-  // ── Tool 3: brick_place (model-only, no frame) ───────────────────────
-  // Replaces brick_build_structure with a streaming-friendly tool.
-  // Uses server.registerTool() so it does NOT create a new app frame.
-  // Bricks are added one at a time with delays so the app's adaptive
-  // polling picks them up for live building visualization.
+  // ── Tool 3: brick_place (model-facing, streams to app via resourceUri) ──
+  // Registered with registerAppTool + resourceUri so the host sends
+  // ontoolinputpartial events to the app as the LLM streams the bricks
+  // JSON string. This gives live building visualization without polling.
+  // The bricks param is a JSON array string (like Excalidraw's elements)
+  // so partial chunks can be parsed incrementally.
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "brick_place",
     {
-      description: "Place one or more bricks. Each brick appears live in the viewer. Call brick_render_scene first to open the viewer, then use this tool. Call brick_read_me for format reference.",
+      title: "Place Bricks",
+      description: "Place one or more bricks. Bricks stream into the viewer live as you generate them. Call brick_render_scene first to open the viewer. Call brick_read_me for format reference.",
       inputSchema: {
-        bricks: z.array(
-          z.object({
-            typeId: z.string().describe("Brick type ID from brick_read_me catalog"),
-            x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-            y: z.number().int().min(0).describe("Y position in plate-height units (0 = ground)"),
-            z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-            rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation in degrees"),
-            color: z.string().optional().default("#cc0000").describe("Hex color"),
-          }),
-        ).describe("Array of bricks to place"),
+        bricks: z.union([
+          z.string(),
+          z.array(
+            z.object({
+              typeId: z.string(),
+              x: z.number(),
+              y: z.number(),
+              z: z.number(),
+              rotation: z.string().optional(),
+              color: z.string().optional(),
+            }),
+          ),
+        ]).describe(
+          `Either a JSON array string of bricks, or a pre-parsed array of bricks. Each brick: {"typeId":"...","x":0,"y":0,"z":0,"rotation":"0","color":"#cc0000"}. rotation and color are optional.`,
+        ),
         clearFirst: z.boolean().optional().default(false).describe("Clear scene before placing"),
       },
+      _meta: { ui: { resourceUri } },
     },
-    async ({ bricks, clearFirst }) => {
+    async ({ bricks: bricksInput, clearFirst }) => {
+      let rawBricks: Array<{ typeId: string; x: number; y: number; z: number; rotation?: string; color?: string }>;
+      if (typeof bricksInput === "string") {
+        try {
+          rawBricks = JSON.parse(bricksInput);
+          if (!Array.isArray(rawBricks)) throw new Error("Expected array");
+        } catch (e) {
+          return {
+            content: [{ type: "text" as const, text: JSON.stringify({ error: `Invalid bricks JSON: ${e instanceof Error ? e.message : "parse error"}` }) }],
+            isError: true,
+          };
+        }
+      } else {
+        rawBricks = bricksInput;
+      }
+
       if (clearFirst) {
         scene.bricks = [];
-        sceneVersion++;
+  
       }
       // Sort bottom-up so supports are placed before the bricks that need them
-      const sorted = [...bricks].sort((a, b) => a.y - b.y);
+      const sorted = [...rawBricks].sort((a, b) => (a.y ?? 0) - (b.y ?? 0));
       let added = 0;
       const skipped: string[] = [];
-      const BRICK_DELAY_MS = 80; // ms between bricks for live building effect
       for (let i = 0; i < sorted.length; i++) {
         const b = sorted[i];
         const brickType = findBrickType(b.typeId);
@@ -539,8 +560,8 @@ export function createServer(): McpServer {
         const instance: BrickInstance = {
           id: generateId(),
           typeId: b.typeId,
-          position: { x: b.x, y: b.y, z: b.z },
-          rotation: Number(b.rotation) as 0 | 90 | 180 | 270,
+          position: { x: b.x ?? 0, y: b.y ?? 0, z: b.z ?? 0 },
+          rotation: Number(b.rotation ?? "0") as 0 | 90 | 180 | 270,
           color: b.color ?? "#cc0000",
         };
         const boundsError = checkBounds(instance, brickType);
@@ -557,17 +578,13 @@ export function createServer(): McpServer {
           continue;
         }
         scene.bricks.push(instance);
-        sceneVersion++;
         added++;
-        // Yield to event loop so poll requests see each brick as it's placed
-        if (i < sorted.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, BRICK_DELAY_MS));
-        }
       }
+
       const result = {
         ...scenePayload(),
         placed: added,
-        total: bricks.length,
+        total: rawBricks.length,
         ...(skipped.length > 0 ? { skipped } : {}),
       };
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
@@ -585,18 +602,22 @@ export function createServer(): McpServer {
     async () => sceneResult(),
   );
 
-  // ── Tool 5: brick_clear_scene (no frame) ──────────────────────────────
+  // ── Tool 5: brick_clear_scene (model-facing, streams result to app) ──
 
-  server.registerTool(
+  registerAppTool(
+    server,
     "brick_clear_scene",
     {
+      title: "Clear Scene",
       description: "Remove all bricks from the scene.",
+      inputSchema: {},
       annotations: { destructiveHint: true },
+      _meta: { ui: { resourceUri } },
     },
     async () => {
       const count = scene.bricks.length;
       scene.bricks = [];
-      sceneVersion++;
+
       return sceneResult(`Cleared ${count} bricks`);
     },
   );
@@ -689,7 +710,7 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): collision — overlaps an existing brick` }) }], isError: true };
       }
       scene.bricks.push(instance);
-      sceneVersion++;
+
       return sceneResult(`Added ${brickType.name} at (${x}, ${y}, ${z})`);
     },
   );
@@ -726,7 +747,7 @@ export function createServer(): McpServer {
           changed = true;
         }
       }
-      sceneVersion++;
+
       const msg = `Removed ${removed.typeId} from (${removed.position.x}, ${removed.position.y}, ${removed.position.z})` +
         (cascadeCount > 0 ? `. Also removed ${cascadeCount} unsupported brick(s) above it.` : "");
       return sceneResult(msg);
@@ -783,7 +804,7 @@ export function createServer(): McpServer {
           changed = true;
         }
       }
-      sceneVersion++;
+
       const msg = `Moved ${brick.typeId} from (${oldPos.x},${oldPos.y},${oldPos.z}) to (${x}, ${y}, ${z})` +
         (cascadeCount > 0 ? `. Removed ${cascadeCount} unsupported brick(s) that were above old position.` : "");
       return sceneResult(msg);
@@ -838,7 +859,7 @@ export function createServer(): McpServer {
           changed = true;
         }
       }
-      sceneVersion++;
+
       const msg = `Rotated ${brick.typeId} at (${brick.position.x}, ${brick.position.y}, ${brick.position.z}) to ${rotation}°` +
         (cascadeCount > 0 ? `. Removed ${cascadeCount} unsupported brick(s) above.` : "");
       return sceneResult(msg);
@@ -865,7 +886,7 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". It may have been removed. Call brick_get_scene to see current bricks.` }) }], isError: true };
       }
       brick.color = color;
-      sceneVersion++;
+
       return sceneResult(`Painted ${brick.typeId} at (${brick.position.x}, ${brick.position.y}, ${brick.position.z}) → ${color}`);
     },
   );
@@ -934,7 +955,7 @@ export function createServer(): McpServer {
           valid.push(brick);
         }
         scene = { name: imported.name, bricks: valid };
-        sceneVersion++;
+  
         const msg = `Imported scene '${scene.name}' with ${valid.length} bricks` +
           (dropped > 0 ? ` (dropped ${dropped} invalid/floating/colliding bricks)` : "");
         return sceneResult(msg);
@@ -959,7 +980,7 @@ export function createServer(): McpServer {
     },
     async ({ name }) => {
       scene.name = name;
-      sceneVersion++;
+
       return sceneResult(`Scene renamed to '${name}'`);
     },
   );
@@ -979,29 +1000,6 @@ export function createServer(): McpServer {
       return {
         content: [{ type: "text" as const, text: JSON.stringify({ catalog: BRICK_CATALOG }) }],
       };
-    },
-  );
-
-  // ── Tool 16: brick_poll_scene (app-only) ────────────────────────────────
-
-  registerAppTool(
-    server,
-    "brick_poll_scene",
-    {
-      title: "Poll Scene",
-      description: "Poll for scene changes. Returns unchanged:true if version matches, otherwise returns full scene.",
-      inputSchema: {
-        knownVersion: z.number().int().optional().describe("Last known scene version"),
-      },
-      _meta: { ui: { resourceUri, visibility: ["app"] } },
-    },
-    async ({ knownVersion }) => {
-      if (knownVersion !== undefined && knownVersion === sceneVersion) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ version: sceneVersion, unchanged: true }) }],
-        };
-      }
-      return sceneResult();
     },
   );
 

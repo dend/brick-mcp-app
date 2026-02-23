@@ -6,79 +6,86 @@
 <title>Brick Builder - Visual Test Harness</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; background: #1a1a2e; color: #e0e0e0; }
-  h1 { color: #00d4aa; font-size: 16px; }
-  .subtitle { color: #888; font-size: 11px; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: #09090b; color: #fafafa; font-size: 13px; }
 
   /* Top bar */
-  .topbar { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #0f3460; background: #16213e; }
+  .topbar { display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid #27272a; background: #09090b; height: 40px; }
+  .topbar h1 { font-size: 13px; font-weight: 600; color: #fafafa; white-space: nowrap; }
+  .topbar .subtitle { color: #52525b; font-size: 11px; }
   .topbar .conn-row { display: flex; gap: 6px; align-items: center; }
-  .topbar input { background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0; padding: 4px 8px; border-radius: 4px; font-family: inherit; font-size: 11px; width: 240px; }
-  .status { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
-  .status.disconnected { background: #ff4444; }
-  .status.connected { background: #00d4aa; }
-  .session-label { font-size: 10px; color: #666; }
+  .topbar input { background: #18181b; border: 1px solid #27272a; color: #fafafa; padding: 0 8px; border-radius: 6px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; width: 220px; height: 28px; }
+  .topbar input:focus { outline: none; border-color: #3f3f46; }
+  .status { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .status.disconnected { background: #ef4444; }
+  .status.connected { background: #22c55e; }
+  .session-label { font-size: 10px; color: #52525b; font-family: monospace; }
 
   /* Layout */
-  .main-layout { display: grid; grid-template-columns: 1fr 360px; height: calc(100vh - 48px); }
+  .main-layout { display: grid; grid-template-columns: 1fr 300px; height: calc(100vh - 40px); }
 
   /* 3D viewport */
-  #viewport { position: relative; background: #0d1117; overflow: hidden; }
+  #viewport { position: relative; background: #0a0a0a; overflow: hidden; }
   #viewport canvas { display: block; width: 100%; height: 100%; }
-  .viewport-overlay { position: absolute; bottom: 10px; left: 10px; font-size: 10px; color: #555; pointer-events: none; }
+  .viewport-overlay { position: absolute; bottom: 8px; left: 8px; font-size: 10px; color: #52525b; pointer-events: none; font-family: monospace; }
 
   /* Right sidebar */
-  .sidebar { display: flex; flex-direction: column; border-left: 1px solid #0f3460; overflow-y: auto; }
-  .panel { background: #16213e; border-bottom: 1px solid #0f3460; padding: 10px 12px; }
-  .panel h2 { font-size: 12px; color: #00d4aa; margin-bottom: 8px; }
+  .sidebar { display: flex; flex-direction: column; border-left: 1px solid #27272a; overflow-y: auto; background: #09090b; }
+  .panel { padding: 10px; border-bottom: 1px solid #27272a; }
+  .panel-header { font-size: 11px; font-weight: 500; color: #71717a; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
 
   /* Buttons */
-  button { background: #0f3460; border: 1px solid #00d4aa33; color: #e0e0e0; padding: 5px 10px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 10px; transition: all 0.15s; }
-  button:hover { background: #1a4a7a; border-color: #00d4aa66; }
-  button:active { transform: scale(0.97); }
-  button.primary { background: #00d4aa22; border-color: #00d4aa; color: #00d4aa; }
+  button { height: 28px; background: #18181b; border: 1px solid #27272a; color: #fafafa; padding: 0 10px; border-radius: 6px; cursor: pointer; font-family: inherit; font-size: 12px; font-weight: 450; transition: background 0.15s, border-color 0.15s; white-space: nowrap; display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
+  button:hover { background: #27272a; border-color: #3f3f46; }
+  button:active { background: #3f3f46; }
+  button.primary { background: #fafafa; color: #09090b; border-color: #fafafa; font-weight: 500; }
+  button.primary:hover { background: #d4d4d8; border-color: #d4d4d8; }
   button:disabled { opacity: 0.4; cursor: not-allowed; }
-  .btn-row { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 6px; }
+  button.active { background: #1d4ed8; border-color: #2563eb; color: #fafafa; }
+  button.active:hover { background: #1e40af; border-color: #1d4ed8; }
+  .btn-row { display: flex; gap: 4px; flex-wrap: wrap; }
+  .btn-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
 
   /* Scene state */
-  .scene-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 11px; }
-  .scene-grid .label { color: #888; }
-  .scene-grid .value { color: #fff; }
+  .scene-grid { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; font-size: 12px; }
+  .scene-grid .label { color: #71717a; }
+  .scene-grid .value { color: #fafafa; font-family: monospace; }
   .brick-list { max-height: 120px; overflow-y: auto; margin-top: 6px; }
-  .brick-item { font-size: 10px; padding: 2px 6px; background: #0a0a1a; border-radius: 3px; margin-bottom: 1px; display: flex; align-items: center; gap: 6px; }
-  .brick-swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid #333; flex-shrink: 0; }
+  .brick-item { font-size: 11px; padding: 2px 6px; background: #18181b; border-radius: 4px; margin-bottom: 1px; display: flex; align-items: center; gap: 6px; font-family: monospace; }
+  .brick-swatch { width: 10px; height: 10px; border-radius: 2px; border: 1px solid #3f3f46; flex-shrink: 0; }
 
   /* Log */
-  #log { background: #0a0a1a; border: 1px solid #0f3460; border-radius: 4px; padding: 6px; height: 200px; overflow-y: auto; font-size: 10px; line-height: 1.5; }
+  #log { background: #18181b; border: 1px solid #27272a; border-radius: 6px; padding: 6px; height: 180px; overflow-y: auto; font-size: 11px; font-family: 'SF Mono', 'Fira Code', monospace; line-height: 1.5; }
   .log-line { white-space: pre-wrap; word-break: break-all; }
-  .log-line.pass { color: #00d4aa; }
-  .log-line.fail { color: #ff4444; }
-  .log-line.info { color: #6ec6ff; }
-  .log-line.warn { color: #ffaa00; }
-  .log-line.dim { color: #555; }
-  .log-line.header { color: #fff; font-weight: bold; border-top: 1px solid #0f3460; padding-top: 3px; margin-top: 3px; }
+  .log-line.pass { color: #22c55e; }
+  .log-line.fail { color: #ef4444; }
+  .log-line.info { color: #3b82f6; }
+  .log-line.warn { color: #f59e0b; }
+  .log-line.dim { color: #52525b; }
+  .log-line.header { color: #fafafa; font-weight: 600; border-top: 1px solid #27272a; padding-top: 3px; margin-top: 3px; }
 
   /* Manual tool */
   .tool-form { display: flex; flex-direction: column; gap: 4px; }
-  .tool-form select, .tool-form textarea { background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0; padding: 4px; border-radius: 4px; font-family: inherit; font-size: 10px; }
-  .tool-form textarea { height: 60px; resize: vertical; }
-  #manualResult { font-size: 10px; max-height: 100px; overflow-y: auto; background: #0a0a1a; border-radius: 4px; padding: 6px; white-space: pre-wrap; word-break: break-all; display: none; }
+  .tool-form select, .tool-form textarea { background: #18181b; border: 1px solid #27272a; color: #fafafa; padding: 6px 8px; border-radius: 6px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 11px; }
+  .tool-form select { height: 28px; padding: 0 8px; }
+  .tool-form textarea { height: 56px; resize: vertical; }
+  .tool-form select:focus, .tool-form textarea:focus { outline: none; border-color: #3f3f46; }
+  #manualResult { font-size: 11px; max-height: 100px; overflow-y: auto; background: #18181b; border: 1px solid #27272a; border-radius: 6px; padding: 6px; white-space: pre-wrap; word-break: break-all; display: none; font-family: monospace; }
 
   /* Placement controls */
   .color-palette { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 4px; }
-  .color-swatch { width: 20px; height: 20px; border-radius: 3px; border: 2px solid transparent; cursor: pointer; transition: border-color 0.15s; }
-  .color-swatch:hover { border-color: #ffffff88; }
-  .color-swatch.selected { border-color: #00d4aa; }
-  .placement-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
-  .placement-row select { background: #0a0a1a; border: 1px solid #0f3460; color: #e0e0e0; padding: 3px 6px; border-radius: 4px; font-family: inherit; font-size: 10px; flex: 1; }
-  .placement-row .rot-display { font-size: 10px; color: #888; min-width: 28px; text-align: center; }
-  button.active { background: #00d4aa33; border-color: #00d4aa; color: #00d4aa; }
-  .placement-status { font-size: 10px; color: #888; margin-top: 4px; min-height: 14px; }
+  .color-swatch { width: 18px; height: 18px; border-radius: 4px; border: 2px solid transparent; cursor: pointer; transition: border-color 0.15s; }
+  .color-swatch:hover { border-color: #71717a; }
+  .color-swatch.selected { border-color: #fafafa; }
+  .placement-row { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+  .placement-row select { background: #18181b; border: 1px solid #27272a; color: #fafafa; padding: 0 8px; border-radius: 6px; font-family: inherit; font-size: 12px; height: 28px; flex: 1; }
+  .placement-row select:focus { outline: none; border-color: #3f3f46; }
+  .placement-row .rot-display { font-size: 11px; color: #71717a; min-width: 24px; text-align: center; font-family: monospace; }
+  .placement-status { font-size: 11px; color: #71717a; margin-top: 4px; min-height: 14px; }
 
   /* Viewport cursor overlay */
-  .cursor-overlay { position: absolute; top: 8px; left: 8px; font-size: 10px; color: #aaa; background: #0a0a1acc; padding: 4px 8px; border-radius: 4px; pointer-events: none; display: none; font-family: inherit; }
-  .cursor-overlay.valid { color: #00d4aa; }
-  .cursor-overlay.blocked { color: #ff4444; }
+  .cursor-overlay { position: absolute; top: 8px; left: 8px; font-size: 11px; color: #a1a1aa; background: #18181bee; padding: 4px 8px; border-radius: 6px; pointer-events: none; display: none; font-family: monospace; border: 1px solid #27272a; }
+  .cursor-overlay.valid { color: #22c55e; }
+  .cursor-overlay.blocked { color: #ef4444; }
 </style>
 <script type="importmap">
 {
@@ -91,10 +98,9 @@
 </head>
 <body>
 
-<!-- Top bar: title + connection -->
 <div class="topbar">
-  <h1>Brick Builder - Visual Test Harness</h1>
-  <span class="subtitle">No LLM required</span>
+  <h1>Brick Builder</h1>
+  <span class="subtitle">Test Harness</span>
   <div style="flex:1"></div>
   <div class="conn-row">
     <span class="status disconnected" id="connStatus"></span>
@@ -105,80 +111,73 @@
 </div>
 
 <div class="main-layout">
-  <!-- 3D Viewport -->
   <div id="viewport">
     <div class="cursor-overlay" id="cursorOverlay"></div>
-    <div class="viewport-overlay" id="viewportInfo">No scene loaded. Connect to server first.</div>
+    <div class="viewport-overlay" id="viewportInfo">Connect to server to load scene</div>
   </div>
 
-  <!-- Sidebar -->
   <div class="sidebar">
-    <!-- Placement Controls -->
     <div class="panel">
-      <h2>Placement Controls</h2>
-      <div class="btn-row">
-        <button id="btnPlacement" onclick="togglePlacement()">Enable Placement</button>
+      <div class="panel-header">Placement</div>
+      <div style="margin-bottom: 6px;">
+        <button id="btnPlacement" onclick="togglePlacement()" style="width:100%">Enable Placement</button>
       </div>
       <div class="placement-row">
         <select id="placeType"></select>
-        <button onclick="rotatePlacement()" title="Rotate (R)">Rot</button>
-        <span class="rot-display" id="rotDisplay">0°</span>
+        <button onclick="rotatePlacement()" title="Rotate (R)">R</button>
+        <span class="rot-display" id="rotDisplay">0&deg;</span>
       </div>
       <div>
-        <span style="font-size:10px; color:#888;">Color:</span>
+        <span style="font-size:11px; color:#71717a;">Color</span>
         <div class="color-palette" id="colorPalette"></div>
       </div>
       <div class="placement-status" id="placementStatus"></div>
     </div>
 
-    <!-- Scene State -->
     <div class="panel">
-      <h2>Scene State</h2>
+      <div class="panel-header">Scene</div>
       <div class="scene-grid">
-        <span class="label">Version:</span><span class="value" id="scVersion">-</span>
-        <span class="label">Bricks:</span><span class="value" id="scCount">-</span>
+        <span class="label">Version</span><span class="value" id="scVersion">-</span>
+        <span class="label">Bricks</span><span class="value" id="scCount">-</span>
       </div>
-      <div style="margin-top: 6px; display: flex; gap: 4px;">
+      <div class="btn-row" style="margin-top: 6px;">
         <button onclick="refreshScene()">Refresh</button>
-        <button onclick="toggleJsonView()">View JSON</button>
-        <button onclick="copyJson()">Copy JSON</button>
+        <button onclick="toggleJsonView()">JSON</button>
+        <button onclick="copyJson()">Copy</button>
       </div>
-      <div id="jsonView" style="display:none; margin-top:6px; max-height:200px; overflow-y:auto; background:#0a0a1a; border:1px solid #0f3460; border-radius:4px; padding:6px; font-size:10px; white-space:pre-wrap; word-break:break-all; color:#e0e0e0;"></div>
+      <div id="jsonView" style="display:none; margin-top:6px; max-height:160px; overflow-y:auto; background:#18181b; border:1px solid #27272a; border-radius:6px; padding:6px; font-size:10px; white-space:pre-wrap; word-break:break-all; color:#fafafa; font-family:monospace;"></div>
       <div class="brick-list" id="brickList"></div>
     </div>
 
-    <!-- Quick Actions -->
     <div class="panel">
-      <h2>Quick Actions</h2>
-      <div class="btn-row">
-        <button onclick="quickBuild()">Perimeter Wall</button>
-        <button onclick="quickAdd()">Random Brick</button>
-        <button onclick="quickTower()">Tower (6)</button>
+      <div class="panel-header">Quick Actions</div>
+      <div class="btn-grid">
+        <button onclick="quickBuild()">Perimeter</button>
+        <button onclick="quickAdd()">Random</button>
+        <button onclick="quickTower()">Tower</button>
         <button onclick="quickClear()">Clear</button>
       </div>
     </div>
 
-    <!-- Automated Tests -->
     <div class="panel">
-      <h2>Tests</h2>
-      <div class="btn-row">
+      <div class="panel-header">Tests</div>
+      <div class="btn-row" style="margin-bottom: 4px;">
         <button class="primary" onclick="runAllTests()" id="btnRunAll">Run All</button>
-        <button onclick="clearLog()">Clear Log</button>
+        <button onclick="clearLog()">Clear</button>
       </div>
-      <div class="btn-row">
-        <button onclick="runTest('build3')">Build 3</button>
+      <div class="btn-row" style="margin-bottom: 6px;">
+        <button onclick="runTest('build3')">Build</button>
         <button onclick="runTest('renderCheck')">Render</button>
         <button onclick="runTest('addBrick')">Add</button>
-        <button onclick="runTest('addAnother')">Add 2nd</button>
+        <button onclick="runTest('addAnother')">Add 2</button>
         <button onclick="runTest('pollCheck')">Poll</button>
         <button onclick="runTest('clear')">Clear</button>
       </div>
       <div id="log"></div>
     </div>
 
-    <!-- Manual Tool Call -->
     <div class="panel">
-      <h2>Manual Tool Call</h2>
+      <div class="panel-header">Manual Tool</div>
       <div class="tool-form">
         <select id="toolName">
           <option value="brick_render_scene">brick_render_scene</option>
@@ -192,8 +191,8 @@
           <option value="brick_poll_scene">brick_poll_scene</option>
           <option value="brick_export_scene">brick_export_scene</option>
         </select>
-        <textarea id="toolArgs" placeholder='{"typeId":"brick_2x4","x":0,"y":0,"z":0,"color":"#cc0000"}'>{}</textarea>
-        <button class="primary" onclick="callManualTool()">Call Tool</button>
+        <textarea id="toolArgs" placeholder='{"typeId":"brick_2x4",...}'>{}</textarea>
+        <button class="primary" onclick="callManualTool()">Call</button>
       </div>
       <div id="manualResult"></div>
     </div>
@@ -282,7 +281,7 @@ const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.setClearColor(0x1a1a2e);
+renderer.setClearColor(0x0a0a0a);
 viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -747,13 +746,13 @@ function updateSceneDisplay(payload) {
     // Update brick list
     const list = document.getElementById('brickList');
     if (payload.scene.bricks.length === 0) {
-      list.innerHTML = '<div style="color:#555; font-size:10px; padding:4px;">No bricks</div>';
+      list.innerHTML = '<div style="color:#52525b; font-size:11px; padding:4px;">No bricks</div>';
     } else {
       list.innerHTML = payload.scene.bricks.map(b =>
         `<div class="brick-item">
           <span class="brick-swatch" style="background:${b.color}"></span>
           <span>${b.typeId} (${b.position.x},${b.position.y},${b.position.z})</span>
-          <span style="color:#555; margin-left:auto;">${b.id.slice(0,6)}</span>
+          <span style="color:#52525b; margin-left:auto;">${b.id.slice(0,6)}</span>
         </div>`
       ).join('');
     }

@@ -3,11 +3,11 @@ import { useApp, useHostStyles } from '@modelcontextprotocol/ext-apps/react';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { StrictMode, useCallback, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { SceneData, CameraState } from './types';
+import type { SceneData, CameraState, BrickInstance } from './types';
 import BrickBuilder from './components/BrickBuilder';
 import './global.css';
 
-function parseScenePayload(result: CallToolResult): { scene?: SceneData; camera?: CameraState; message?: string; version?: number; unchanged?: boolean } | null {
+function parseScenePayload(result: CallToolResult): { scene?: SceneData; camera?: CameraState; message?: string } | null {
   const textContent = result.content?.find((c) => c.type === 'text');
   if (!textContent || !('text' in textContent)) return null;
   try {
@@ -17,34 +17,79 @@ function parseScenePayload(result: CallToolResult): { scene?: SceneData; camera?
   }
 }
 
+// Parse a potentially-incomplete JSON array string (streamed from LLM).
+// Finds the last closing brace and truncates there, then retries parse.
+function parsePartialBricks(str: string | undefined): Array<{ typeId: string; x: number; y: number; z: number; rotation?: string; color?: string }> {
+  if (!str?.trim().startsWith('[')) return [];
+  try { return JSON.parse(str); } catch { /* partial */ }
+  const last = str.lastIndexOf('}');
+  if (last < 0) return [];
+  try { return JSON.parse(str.substring(0, last + 1) + ']'); } catch { /* incomplete */ }
+  return [];
+}
+
+// Convert raw streamed brick data into BrickInstance objects with temporary IDs
+function rawToBrickInstances(raw: Array<{ typeId: string; x: number; y: number; z: number; rotation?: string; color?: string }>): BrickInstance[] {
+  return raw.map((b, i) => ({
+    id: `_stream_${i}`,
+    typeId: b.typeId,
+    position: { x: b.x ?? 0, y: b.y ?? 0, z: b.z ?? 0 },
+    rotation: (Number(b.rotation ?? '0') as 0 | 90 | 180 | 270),
+    color: b.color ?? '#cc0000',
+  }));
+}
+
 function BrickApp() {
   const [sceneData, setSceneData] = useState<SceneData | null>(null);
   const [cameraState, setCameraState] = useState<CameraState | null>(null);
   const [hostContext, setHostContext] = useState<McpUiHostContext | undefined>();
-  const knownVersionRef = useRef<number | undefined>(undefined);
-  // Timestamp of last direct (non-poll) tool result — used to suppress polling briefly
-  const lastDirectResultRef = useRef<number>(0);
+  // Snapshot of scene bricks before streaming started — used to merge streaming bricks
+  const preStreamBricksRef = useRef<BrickInstance[] | null>(null);
+  // Track current scene data for use in callbacks
+  const sceneDataRef = useRef<SceneData | null>(null);
+  sceneDataRef.current = sceneData;
 
   // Central handler for ALL tool results — both host-initiated and app-initiated
   const handleToolResult = useCallback((result: CallToolResult) => {
     const payload = parseScenePayload(result);
     if (!payload) return;
-    // Skip stale results — don't let an older version overwrite a newer one
-    if (payload.version !== undefined && knownVersionRef.current !== undefined
-        && payload.version < knownVersionRef.current) {
-      return;
-    }
-    if (payload.version !== undefined) {
-      knownVersionRef.current = payload.version;
-    }
     if (payload.scene) {
       setSceneData(payload.scene);
     }
     if (payload.camera) {
       setCameraState(payload.camera);
     }
-    // Mark that a direct tool result was just processed
-    lastDirectResultRef.current = Date.now();
+    // Streaming is done — clear the pre-stream snapshot
+    preStreamBricksRef.current = null;
+  }, []);
+
+  // Apply streamed bricks to the scene — merges base bricks with streaming ones.
+  // `params` has shape { arguments?: Record<string, unknown> } per the SDK spec.
+  const applyStreamingBricks = useCallback((params: { arguments?: Record<string, unknown> }, dropLast: boolean) => {
+    const bricksJson = params.arguments?.bricks as string | undefined;
+    if (!bricksJson) return;
+
+    let raw = parsePartialBricks(bricksJson);
+    if (raw.length === 0) return;
+
+    // Drop last element during partial streaming — it may be incomplete
+    if (dropLast && raw.length > 1) {
+      raw = raw.slice(0, -1);
+    }
+
+    // Snapshot the base scene on first streaming update
+    if (preStreamBricksRef.current === null) {
+      preStreamBricksRef.current = sceneDataRef.current?.bricks ?? [];
+    }
+
+    const clearFirst = params.arguments?.clearFirst as boolean | undefined;
+    const baseBricks = clearFirst ? [] : preStreamBricksRef.current;
+    const streamBricks = rawToBrickInstances(raw);
+
+    setSceneData((prev) => ({
+      name: prev?.name ?? 'Untitled',
+      bricks: [...baseBricks, ...streamBricks],
+    }));
   }, []);
 
   const onAppCreated = useCallback((app: App) => {
@@ -52,9 +97,26 @@ function BrickApp() {
       handleToolResult(result);
     };
 
-    app.ontoolinput = async () => {};
+    // Partial streaming: LLM is still generating the bricks JSON
+    app.ontoolinputpartial = async (input) => {
+      applyStreamingBricks(input, true);
+    };
 
-    app.ontoolcancelled = () => {};
+    // Final input: LLM has finished generating, but server hasn't processed yet
+    app.ontoolinput = async (input) => {
+      applyStreamingBricks(input, false);
+    };
+
+    app.ontoolcancelled = () => {
+      // If cancelled mid-stream, revert to pre-stream state
+      if (preStreamBricksRef.current !== null) {
+        setSceneData((prev) => ({
+          name: prev?.name ?? 'Untitled',
+          bricks: preStreamBricksRef.current!,
+        }));
+        preStreamBricksRef.current = null;
+      }
+    };
 
     app.onerror = console.error;
 
@@ -63,7 +125,7 @@ function BrickApp() {
     };
 
     app.onteardown = async () => ({ });
-  }, [handleToolResult]);
+  }, [handleToolResult, applyStreamingBricks]);
 
   const { app, error } = useApp({
     appInfo: { name: 'Brick Builder', version: '1.0.0' },
@@ -87,65 +149,6 @@ function BrickApp() {
       content: [{ type: 'text', text: `Brick Builder scene '${sceneData.name}': ${sceneData.bricks.length} bricks` }],
     }).catch(() => {});
   }, [app, sceneData]);
-
-  // Poll for scene changes (picks up model-initiated mutations).
-  // Uses adaptive timing: re-polls quickly when changes are detected (live building),
-  // falls back to 1s interval when idle.
-  useEffect(() => {
-    if (!app) return;
-    let timeoutId: ReturnType<typeof setTimeout>;
-    let cancelled = false;
-
-    async function poll() {
-      if (cancelled) return;
-      // Skip poll if a direct tool result was processed very recently
-      if (Date.now() - lastDirectResultRef.current < 500) {
-        timeoutId = setTimeout(poll, 200);
-        return;
-      }
-      try {
-        const result = await app!.callServerTool({
-          name: 'brick_poll_scene',
-          arguments: { knownVersion: knownVersionRef.current },
-        });
-        if (cancelled) return;
-        const payload = parseScenePayload(result);
-        if (!payload || payload.unchanged) {
-          // No changes — poll at normal rate
-          timeoutId = setTimeout(poll, 1000);
-          return;
-        }
-        // Skip stale poll results
-        if (payload.version !== undefined && knownVersionRef.current !== undefined
-            && payload.version < knownVersionRef.current) {
-          timeoutId = setTimeout(poll, 1000);
-          return;
-        }
-        // Also skip if a direct result arrived while this poll was in-flight
-        if (Date.now() - lastDirectResultRef.current < 500) {
-          timeoutId = setTimeout(poll, 200);
-          return;
-        }
-        if (payload.version !== undefined) {
-          knownVersionRef.current = payload.version;
-        }
-        if (payload.scene) {
-          setSceneData(payload.scene);
-        }
-        // Changes detected — re-poll quickly for live building effect
-        timeoutId = setTimeout(poll, 50);
-      } catch {
-        if (cancelled) return;
-        timeoutId = setTimeout(poll, 1000);
-      }
-    }
-
-    timeoutId = setTimeout(poll, 1000);
-    return () => {
-      cancelled = true;
-      clearTimeout(timeoutId);
-    };
-  }, [app]);
 
   if (error) {
     return (

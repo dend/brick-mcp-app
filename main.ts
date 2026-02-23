@@ -40,6 +40,10 @@ export async function startStreamableHTTPServer(
   });
 
   app.all("/mcp", async (req: Request, res: Response) => {
+    // Prevent reverse-proxy buffering (Cloudflare Tunnels, Nginx, etc.)
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("X-Accel-Buffering", "no");
+
     // Check for existing session via header
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
