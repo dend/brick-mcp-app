@@ -138,9 +138,12 @@
         <span class="label">Version:</span><span class="value" id="scVersion">-</span>
         <span class="label">Bricks:</span><span class="value" id="scCount">-</span>
       </div>
-      <div style="margin-top: 6px;">
+      <div style="margin-top: 6px; display: flex; gap: 4px;">
         <button onclick="refreshScene()">Refresh</button>
+        <button onclick="toggleJsonView()">View JSON</button>
+        <button onclick="copyJson()">Copy JSON</button>
       </div>
+      <div id="jsonView" style="display:none; margin-top:6px; max-height:200px; overflow-y:auto; background:#0a0a1a; border:1px solid #0f3460; border-radius:4px; padding:6px; font-size:10px; white-space:pre-wrap; word-break:break-all; color:#e0e0e0;"></div>
       <div class="brick-list" id="brickList"></div>
     </div>
 
@@ -179,7 +182,9 @@
       <div class="tool-form">
         <select id="toolName">
           <option value="brick_render_scene">brick_render_scene</option>
-          <option value="brick_build_structure">brick_build_structure</option>
+          <option value="brick_read_me">brick_read_me</option>
+          <option value="brick_get_available">brick_get_available</option>
+          <option value="brick_place">brick_place</option>
           <option value="brick_get_scene">brick_get_scene</option>
           <option value="brick_add">brick_add</option>
           <option value="brick_remove">brick_remove</option>
@@ -831,7 +836,7 @@ window.quickBuild = async function() {
   }
 
   try {
-    const resp = await callTool('brick_build_structure', { bricks });
+    const resp = await callTool('brick_place', { bricks });
     const p = parseToolPayload(resp.body);
     updateSceneDisplay(p);
     log(`Built perimeter: ${p?.scene?.bricks?.length} bricks, v${p?.version}`, 'pass');
@@ -859,7 +864,7 @@ window.quickTower = async function() {
     });
   }
   try {
-    const resp = await callTool('brick_build_structure', { bricks });
+    const resp = await callTool('brick_place', { bricks });
     const p = parseToolPayload(resp.body);
     updateSceneDisplay(p);
     log(`Tower: ${p?.scene?.bricks?.length} bricks, v${p?.version}`, 'pass');
@@ -958,7 +963,7 @@ function assert(condition, msg) {
 const tests = {
   async build3() {
     log('Test: Build 3 bricks', 'header');
-    const resp = await callTool('brick_build_structure', {
+    const resp = await callTool('brick_place', {
       bricks: [
         { typeId: 'brick_2x4', x: 0, y: 0, z: 0, color: '#cc0000' },
         { typeId: 'brick_2x4', x: 0, y: 0, z: 4, color: '#0055bf' },
@@ -1037,6 +1042,42 @@ window.runAllTests = async function() {
 };
 
 window.refreshScene = refreshScene;
+
+// ── JSON View ─────────────────────────────────────────────────────────────────
+
+window.toggleJsonView = function() {
+  const el = document.getElementById('jsonView');
+  if (el.style.display === 'none') {
+    const bricks = currentBricks.map(b => ({
+      typeId: b.typeId,
+      x: b.position.x,
+      y: b.position.y,
+      z: b.position.z,
+      rotation: String(b.rotation),
+      color: b.color,
+    }));
+    el.textContent = JSON.stringify(bricks, null, 2);
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
+};
+
+window.copyJson = function() {
+  const bricks = currentBricks.map(b => ({
+    typeId: b.typeId,
+    x: b.position.x,
+    y: b.position.y,
+    z: b.position.z,
+    rotation: String(b.rotation),
+    color: b.color,
+  }));
+  const json = JSON.stringify(bricks, null, 2);
+  navigator.clipboard.writeText(json).then(
+    () => log('JSON copied to clipboard', 'pass'),
+    () => log('Copy failed — check clipboard permissions', 'warn'),
+  );
+};
 
 // ── Placement Mode ────────────────────────────────────────────────────────────
 
@@ -1388,7 +1429,9 @@ window.rotatePlacement = function() {
 // ── Prefill tool args ────────────────────────────────────────────────────────
 const argTemplates = {
   brick_render_scene: '{}',
-  brick_build_structure: JSON.stringify({
+  brick_read_me: '{}',
+  brick_get_available: '{}',
+  brick_place: JSON.stringify({
     bricks: [
       { typeId: 'brick_2x4', x: 0, y: 0, z: 0, color: '#cc0000' },
       { typeId: 'brick_2x4', x: 0, y: 0, z: 4, color: '#0055bf' },

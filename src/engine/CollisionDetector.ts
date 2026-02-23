@@ -91,6 +91,39 @@ function hasStudSupport(
   return true;
 }
 
+// Check if a brick has physical support — on baseplate (Y=0) or resting on another brick.
+export function checkSupportClient(
+  bricks: BrickInstance[],
+  typeId: string,
+  x: number,
+  y: number,
+  z: number,
+  rotation: 0 | 90 | 180 | 270,
+): boolean {
+  const brickType = getBrickType(typeId);
+  if (!brickType) return false;
+  const candidate: BrickInstance = {
+    id: '__check__',
+    typeId,
+    position: { x, y, z },
+    rotation,
+    color: '#000000',
+  };
+  const aabb = getBrickAABB(candidate, brickType);
+  if (aabb.minY === 0) return true; // On baseplate
+  for (const existing of bricks) {
+    const et = getBrickType(existing.typeId);
+    if (!et) continue;
+    const ea = getBrickAABB(existing, et);
+    if (ea.maxY === aabb.minY &&
+        ea.minX < aabb.maxX && ea.maxX > aabb.minX &&
+        ea.minZ < aabb.maxZ && ea.maxZ > aabb.minZ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function checkCollisionClient(
   bricks: BrickInstance[],
   typeId: string,

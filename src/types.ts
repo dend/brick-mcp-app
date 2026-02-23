@@ -32,4 +32,4 @@ export interface AABB {
   minZ: number; maxZ: number;
 }
 
-export type InteractionMode = 'place' | 'select' | 'move' | 'rotate' | 'delete' | 'paint';
+export type InteractionMode = 'look' | 'place' | 'select' | 'move' | 'rotate' | 'delete' | 'paint';

@@ -28,10 +28,11 @@ export const DEFAULT_COLORS: { name: string; hex: string }[] = [
 ];
 
 export const INTERACTION_MODES: { mode: InteractionMode; label: string; shortcut: string }[] = [
-  { mode: 'place', label: 'Place', shortcut: '1' },
-  { mode: 'select', label: 'Select', shortcut: '2' },
-  { mode: 'move', label: 'Move', shortcut: '3' },
-  { mode: 'rotate', label: 'Rotate', shortcut: '4' },
-  { mode: 'delete', label: 'Delete', shortcut: '5' },
-  { mode: 'paint', label: 'Paint', shortcut: '6' },
+  { mode: 'look', label: 'Look', shortcut: '1' },
+  { mode: 'place', label: 'Place', shortcut: '2' },
+  { mode: 'select', label: 'Select', shortcut: '3' },
+  { mode: 'move', label: 'Move', shortcut: '4' },
+  { mode: 'rotate', label: 'Rotate', shortcut: '5' },
+  { mode: 'delete', label: 'Delete', shortcut: '6' },
+  { mode: 'paint', label: 'Paint', shortcut: '7' },
 ];

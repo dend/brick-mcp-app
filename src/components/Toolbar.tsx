@@ -2,6 +2,7 @@ import type { InteractionMode } from '../types';
 import { INTERACTION_MODES } from '../constants';
 
 const MODE_ICONS: Record<InteractionMode, string> = {
+  look: '👁',
   place: '🧱',
   select: '👆',
   move: '✋',

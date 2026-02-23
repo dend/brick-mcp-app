@@ -6,7 +6,7 @@ import type { BrickType } from '../types';
 import type { SceneManagerHandle } from './useSceneManager';
 import { RaycastHelper } from '../three/RaycastHelper';
 import { GhostPreview } from '../three/GhostPreview';
-import { checkCollisionClient } from '../engine/CollisionDetector';
+import { checkCollisionClient, checkSupportClient } from '../engine/CollisionDetector';
 import { getBrickType } from '../engine/BrickCatalog';
 import { BASEPLATE_SIZE } from '../constants';
 
@@ -111,11 +111,13 @@ export function useInteraction({
     }
 
     function onPointerMove(event: PointerEvent) {
+      if (mode === 'look') return; // Camera-only mode — no brick interaction
       if (mode === 'place') {
         const hit = getGridHit(event);
         if (hit && ghostRef.current) {
           const valid =
             isInBounds(hit.gridX, hit.gridZ, selectedBrickType, rotation) &&
+            checkSupportClient(bricks, selectedBrickType.id, hit.gridX, hit.gridY, hit.gridZ, rotation) &&
             !checkCollisionClient(bricks, selectedBrickType.id, hit.gridX, hit.gridY, hit.gridZ, rotation);
           ghostRef.current.show(selectedBrickType, hit.gridX, hit.gridY, hit.gridZ, rotation, valid);
           lastGridRef.current = { x: hit.gridX, y: hit.gridY, z: hit.gridZ };
@@ -132,6 +134,7 @@ export function useInteraction({
           if (!bt) return;
           const valid =
             isInBounds(hit.gridX, hit.gridZ, bt, dragBrick.rotation) &&
+            checkSupportClient(bricks, dragBrick.typeId, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation) &&
             !checkCollisionClient(bricks, dragBrick.typeId, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation, dragBrick.id);
           ghostRef.current.show(bt, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation, valid);
           lastGridRef.current = { x: hit.gridX, y: hit.gridY, z: hit.gridZ };
@@ -141,11 +144,13 @@ export function useInteraction({
 
     function onPointerDown(event: PointerEvent) {
       if (event.button !== 0) return;
+      if (mode === 'look') return; // Camera-only mode — no brick interaction
 
       if (mode === 'place') {
         const hit = getGridHit(event);
         if (!hit) return;
         if (!isInBounds(hit.gridX, hit.gridZ, selectedBrickType, rotation)) return;
+        if (!checkSupportClient(bricks, selectedBrickType.id, hit.gridX, hit.gridY, hit.gridZ, rotation)) return;
         if (checkCollisionClient(bricks, selectedBrickType.id, hit.gridX, hit.gridY, hit.gridZ, rotation)) return;
         callTool('brick_add', {
           typeId: selectedBrickType.id,
@@ -211,6 +216,7 @@ export function useInteraction({
           if (brick) {
             const bt = getBrickType(brick.typeId);
             if (bt && isInBounds(x, z, bt, brick.rotation) &&
+              checkSupportClient(bricks, brick.typeId, x, y, z, brick.rotation) &&
               !checkCollisionClient(bricks, brick.typeId, x, y, z, brick.rotation, drag.brickId)) {
               callTool('brick_move', { brickId: drag.brickId, x, y, z });
             }

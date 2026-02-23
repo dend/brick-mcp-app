@@ -185,6 +185,39 @@ function checkBounds(brick: BrickInstance, brickType: BrickDefinition): string |
   return null;
 }
 
+// Verify a brick is supported — either on the baseplate (Y=0) or resting on
+// another brick's top face with XZ overlap (no floating bricks).
+function checkSupport(bricks: BrickInstance[], brick: BrickInstance, brickType: BrickDefinition): boolean {
+  const aabb = getBrickAABB(brick, brickType);
+  if (aabb.minY === 0) return true; // On baseplate
+  for (const existing of bricks) {
+    const et = findBrickType(existing.typeId);
+    if (!et) continue;
+    const ea = getBrickAABB(existing, et);
+    // Existing brick's top touches new brick's bottom, with XZ overlap
+    if (ea.maxY === aabb.minY &&
+        ea.minX < aabb.maxX && ea.maxX > aabb.minX &&
+        ea.minZ < aabb.maxZ && ea.maxZ > aabb.minZ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Find all bricks that would lose support if the scene were mutated.
+// Pass the proposed brick list (after the mutation) and it returns IDs of unsupported bricks.
+function findUnsupported(bricks: BrickInstance[]): string[] {
+  const unsupported: string[] = [];
+  for (const brick of bricks) {
+    const bt = findBrickType(brick.typeId);
+    if (!bt) continue;
+    if (!checkSupport(bricks.filter(b => b.id !== brick.id), brick, bt)) {
+      unsupported.push(brick.id);
+    }
+  }
+  return unsupported;
+}
+
 function generateId(): string {
   return crypto.randomUUID();
 }
@@ -196,73 +229,161 @@ const resourceUri = "ui://brick-builder/mcp-app.html";
 // ── Brick catalog cheat sheet (returned by brick_read_me) ───────────────────
 
 function buildCatalogCheatSheet(): string {
-  const byCategory: Record<string, BrickDefinition[]> = {};
-  for (const bt of BRICK_CATALOG) {
-    (byCategory[bt.category] ??= []).push(bt);
-  }
-
   let sheet = `# Brick Builder Reference
 
-## IMPORTANT: Always call brick_read_me FIRST
-Before building anything, call brick_read_me to learn available brick types.
-Do NOT guess brick type IDs — use only the IDs listed below.
+You only need to call brick_read_me once. Do NOT call it again — you will not see anything new.
 
-## Available Brick Types
+## Order of Operations (MANDATORY — follow exactly)
+1. brick_read_me → Call once to learn the building format and rules (you just did this)
+2. brick_get_available → Call to see all available brick types and their dimensions
+3. brick_render_scene → Call BEFORE placing any bricks. This opens the 3D viewer for the user. If you skip this step, the user cannot see anything you build.
+4. brick_place → Now you can place bricks. Each brick appears live in the viewer as it's placed.
+5. brick_get_scene → Call anytime to inspect what's currently built
+6. brick_clear_scene → Call to remove all bricks and start over
 
-`;
+CRITICAL: You must call brick_render_scene before your first brick_place call. Placing bricks without rendering the scene first means the user has no viewer open and sees nothing.
 
-  for (const [cat, bricks] of Object.entries(byCategory)) {
-    sheet += `### ${cat.charAt(0).toUpperCase() + cat.slice(1)}s\n`;
-    sheet += `| ID | Name | Width (X) | Depth (Z) | Height (Y) |\n`;
-    sheet += `|----|------|-----------|-----------|------------|\n`;
-    for (const bt of bricks) {
-      sheet += `| ${bt.id} | ${bt.name} | ${bt.studsX} | ${bt.studsZ} | ${bt.heightUnits} |\n`;
-    }
-    sheet += `\n`;
-  }
+## Coordinate System
+- Baseplate: ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs on the X and Z axes
+- Y axis: height in plate units (1 standard brick = 3 Y units, 1 plate = 1 Y unit)
+- Valid ranges: X 0–${BASEPLATE_SIZE - 1}, Z 0–${BASEPLATE_SIZE - 1}, Y 0+
+- Rotation: "0", "90", "180", or "270" (string)
+- Bricks CANNOT float — they must sit on the baseplate (Y=0) or on top of another brick
 
-  sheet += `## Coordinate System
-- Baseplate: ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs (X and Z axes)
-- Y axis: height in plate units (1 brick height = 3 plate units)
-- Valid X: 0–${BASEPLATE_SIZE - 1}, Z: 0–${BASEPLATE_SIZE - 1}, Y: 0+
-- Rotation: 0, 90, 180, or 270 degrees
+## Colors
+Red #cc0000 · Blue #0055bf · Green #237841 · Yellow #f2cd37 · White #ffffff · Black #1b2a34
+Orange #fe8a18 · Brown #583927 · Tan #e4cd9e · Dark grey #6b5a5a · Light grey #9ba19d · Dark blue #0a3463
 
-## Height Guide
-- 1 plate = 1 height unit (Y)
-- 1 brick = 3 height units (Y)
-- To stack bricks: next brick Y = current Y + current brick's heightUnits
-- Example: brick at Y=0 (height 3) → next brick at Y=3
+## Examples
 
-## Suggested Colors
-- Red: #cc0000
-- Blue: #0055bf
-- Yellow: #f2cd37
-- Green: #237841
-- White: #ffffff
-- Black: #1b2a34
-- Orange: #fe8a18
-- Dark grey: #6b5a5a
-- Light grey: #9ba19d
-- Brown: #583927
-- Tan: #e4cd9e
-- Dark blue: #0a3463
+### Wall (4 bricks tall)
+Same X and Z, increment Y by heightUnits (3 for standard bricks):
+\`\`\`json
+[
+  {"typeId":"brick_1x8","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x8","x":10,"y":3,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x8","x":10,"y":6,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x8","x":10,"y":9,"z":10,"rotation":"0","color":"#cc0000"}
+]
+\`\`\`
 
-## Building Tips
-- Build bottom-up, layer by layer (low Y first)
-- Use 2×4 and 2×3 bricks for structural walls — they're strong
-- Offset bricks between rows for realistic interlocking pattern
-- Use plates (height 1) for thin layers and detailing
-- Slopes create rooflines and angled surfaces
-- Technic bricks have pin holes for mechanical connections
-- Corner bricks create L-shaped joints
+### Interlocking wall (staggered for strength)
+Offset bricks by half their length on alternating rows. This is how real walls are built:
+\`\`\`json
+[
+  {"typeId":"brick_1x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x4","x":10,"y":0,"z":14,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x4","x":10,"y":3,"z":12,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x4","x":10,"y":3,"z":16,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x4","x":10,"y":6,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_1x4","x":10,"y":6,"z":14,"rotation":"0","color":"#cc0000"}
+]
+\`\`\`
 
-## Tool Usage
-1. Call brick_read_me first (this tool) — you only need to call it once
-2. Call brick_render_scene to open the 3D viewer
-3. Call brick_place to add bricks — you can place 1 or many at a time
-4. The user sees each brick appear live in the 3D view as you place them
-5. Call brick_get_scene to inspect what's currently built
-6. Call brick_clear_scene to start fresh
+### Enclosed room (4 walls, 2 layers, interlocking corners)
+Layer 0: left & right walls use rot "0"/"180", front & back use rot "90".
+Layer 1 (Y=3): offset by 2 studs and swap rotations ("270" instead of "90") so corners interlock.
+\`\`\`json
+[
+  // Layer 0 — left wall (X=10, rot "0", Z goes 10,14,18,22)
+  {"typeId":"brick_2x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":10,"y":0,"z":14,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":10,"y":0,"z":18,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":10,"y":0,"z":22,"rotation":"0","color":"#cc0000"},
+  // Layer 0 — right wall (X=22, rot "180", same Z positions)
+  {"typeId":"brick_2x4","x":22,"y":0,"z":10,"rotation":"180","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":22,"y":0,"z":14,"rotation":"180","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":22,"y":0,"z":18,"rotation":"180","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":22,"y":0,"z":22,"rotation":"180","color":"#cc0000"},
+  // Layer 0 — front wall (Z=24, rot "90", X goes 12,16,20)
+  {"typeId":"brick_2x4","x":12,"y":0,"z":24,"rotation":"90","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":16,"y":0,"z":24,"rotation":"90","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":20,"y":0,"z":24,"rotation":"90","color":"#cc0000"},
+  // Layer 0 — back wall (Z=10, rot "90", X goes 12,16,20)
+  {"typeId":"brick_2x4","x":12,"y":0,"z":10,"rotation":"90","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":16,"y":0,"z":10,"rotation":"90","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":20,"y":0,"z":10,"rotation":"90","color":"#cc0000"},
+  // Layer 1 — left wall (offset Z by 2: Z goes 12,16,20)
+  {"typeId":"brick_2x4","x":10,"y":3,"z":12,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":10,"y":3,"z":16,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":10,"y":3,"z":20,"rotation":"0","color":"#cc0000"},
+  // Layer 1 — right wall (offset Z by 2)
+  {"typeId":"brick_2x4","x":22,"y":3,"z":12,"rotation":"180","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":22,"y":3,"z":16,"rotation":"180","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":22,"y":3,"z":20,"rotation":"180","color":"#cc0000"},
+  // Layer 1 — front wall (rot "270", offset X: X goes 10,14,18,22 — covers corners!)
+  {"typeId":"brick_2x4","x":10,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":14,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":18,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":22,"y":3,"z":24,"rotation":"270","color":"#cc0000"},
+  // Layer 1 — back wall (rot "270", offset X: covers corners)
+  {"typeId":"brick_2x4","x":10,"y":3,"z":10,"rotation":"270","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":14,"y":3,"z":10,"rotation":"270","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":18,"y":3,"z":10,"rotation":"270","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":22,"y":3,"z":10,"rotation":"270","color":"#cc0000"}
+]
+\`\`\`
+Key pattern: on layer 0, side walls (rot "0"/"180") cover the corners. On layer 1, front/back walls (rot "270") extend to cover the corners instead. This alternation locks the corners together.
+
+### Placing side by side along X
+For a brick_2x4 (X=2, Z=4), the next brick along X starts at x+2:
+\`\`\`json
+[
+  {"typeId":"brick_2x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":12,"y":0,"z":10,"rotation":"0","color":"#0055bf"},
+  {"typeId":"brick_2x4","x":14,"y":0,"z":10,"rotation":"0","color":"#237841"}
+]
+\`\`\`
+
+### Placing side by side along Z
+Same brick — the next along Z starts at z+4 (the Z dimension):
+\`\`\`json
+[
+  {"typeId":"brick_2x4","x":10,"y":0,"z":10,"rotation":"0","color":"#cc0000"},
+  {"typeId":"brick_2x4","x":10,"y":0,"z":14,"rotation":"0","color":"#0055bf"},
+  {"typeId":"brick_2x4","x":10,"y":0,"z":18,"rotation":"0","color":"#237841"}
+]
+\`\`\`
+
+## BAD vs GOOD Patterns
+
+BAD — building top-down (bricks float and get rejected):
+  y:9 first, then y:6, y:3, y:0
+GOOD — building bottom-up (each brick lands on the one below):
+  y:0 first, then y:3, y:6, y:9
+
+BAD — guessing brick IDs:
+  "typeId": "2x4_brick"   ← WRONG, will be skipped
+GOOD — using exact IDs from the catalog above:
+  "typeId": "brick_2x4"   ← correct
+
+BAD — forgetting rotation swaps dimensions:
+  brick_2x4 at rotation "90" occupies X=4, Z=2 (swapped from X=2, Z=4)
+GOOD — accounting for the swap when tiling:
+  rotation "0": next along X is x+2, next along Z is z+4
+  rotation "90": next along X is x+4, next along Z is z+2
+
+## Building Strategy
+1. Plan the footprint first — lay the ground floor (Y=0)
+2. Build upward layer by layer — each layer's Y = previous Y + heightUnits
+3. Use brick_place with many bricks per call for efficiency (up to ~50 per call is fine)
+4. Alternate brick offsets between rows for realistic interlocking
+5. Use plates (heightUnits=1) for thin details, trim, and floors
+6. Use slopes for rooflines — studs are only on the flat side
+7. Place bricks in bottom-up order within each brick_place call
+8. Build in sections or modules for large builds — foundation, then walls, then roof
+
+## Best Practices
+- Work at a scale that makes sense for the detail level you want. Larger scale gives more room for realism.
+- Plan your color scheme early. Mixing too many colors by accident is a common mistake — pick 2-3 main colors and 1-2 accent colors.
+- Overlap your layers like real brickwork — never stack bricks where joints align vertically. That creates weak seam lines. Offset by half a brick length on alternating rows.
+- Distribute weight evenly and think about the base. Wide, flat bases are more stable than tall narrow towers without internal reinforcement.
+- Use Technic bricks internally for rigid structural support, especially in large builds.
+- Use consistent lighting logic — if your build has a light source, shade the darker side with darker colored bricks.
+- Finish exposed surfaces with plates for a clean, polished look. Use slopes for angled surfaces and rooflines.
+- For sci-fi and industrial builds, add small technical-looking details (greebling) with 1x1 bricks and plates, but apply with restraint so it doesn't look random.
+- Don't be afraid to use brick_clear_scene and rebuild. The best builders redo sections many times.
+- Step back and consider the build from the intended viewing angle, not just from above.
 `;
 
   return sheet;
@@ -299,23 +420,54 @@ export function createServer(): McpServer {
   // Like Excalidraw's read_me — returns comprehensive cheat sheet with
   // available brick types, coordinate system, colors, and building tips.
 
-  server.tool(
+  server.registerTool(
     "brick_read_me",
-    "Returns the complete brick catalog and building guide. ALWAYS call this first before building anything — it lists all available brick type IDs, dimensions, the coordinate system, color palette, and building tips. You only need to call it once per conversation.",
-    {},
+    {
+      description: "Returns the building guide, coordinate system, and examples. Call this BEFORE using any other brick tool for the first time.",
+      annotations: { readOnlyHint: true },
+    },
     async () => ({
       content: [{ type: "text" as const, text: buildCatalogCheatSheet() }],
     }),
   );
 
-  // ── Tool 2: brick_render_scene (model-only, creates frame) ────────────
+  // ── Tool 2: brick_get_available (model-only, no frame) ────────────────
+  // Returns the full brick catalog with all types and their metadata.
+
+  server.registerTool(
+    "brick_get_available",
+    {
+      description: "Returns all available brick types with their IDs, dimensions, and categories. Call this to learn what bricks you can use before building.",
+      annotations: { readOnlyHint: true },
+    },
+    async () => {
+      const byCategory: Record<string, BrickDefinition[]> = {};
+      for (const bt of BRICK_CATALOG) {
+        (byCategory[bt.category] ??= []).push(bt);
+      }
+      let text = "# Available Brick Types\n\nUse these exact typeId values in brick_place. Do NOT guess IDs.\n\n";
+      for (const [cat, bricks] of Object.entries(byCategory)) {
+        text += `## ${cat.charAt(0).toUpperCase() + cat.slice(1)}s\n`;
+        text += `| typeId | Name | X (width) | Z (depth) | Y (height) |\n`;
+        text += `|--------|------|-----------|-----------|------------|\n`;
+        for (const bt of bricks) {
+          text += `| ${bt.id} | ${bt.name} | ${bt.studsX} | ${bt.studsZ} | ${bt.heightUnits} |\n`;
+        }
+        text += `\n`;
+      }
+      text += `Rotation swaps X and Z dimensions. E.g. brick_2x4 at rotation "90" occupies X=4, Z=2.\n`;
+      return { content: [{ type: "text" as const, text }] };
+    },
+  );
+
+  // ── Tool 3: brick_render_scene (model-only, creates frame) ────────────
 
   registerAppTool(
     server,
     "brick_render_scene",
     {
       title: "Render Brick Scene",
-      description: "Opens the 3D brick builder UI. Call brick_read_me first to learn available bricks, then call this to open the viewer, then use brick_place to add bricks.",
+      description: "Opens the 3D brick builder viewer. You MUST call this before brick_place so the user can see the bricks. Call brick_read_me first to learn the brick format.",
       inputSchema: {},
       _meta: { ui: { resourceUri } },
     },
@@ -324,39 +476,43 @@ export function createServer(): McpServer {
 
   // ── Tool 3: brick_place (model-only, no frame) ───────────────────────
   // Replaces brick_build_structure with a streaming-friendly tool.
-  // Uses server.tool() so it does NOT create a new app frame.
+  // Uses server.registerTool() so it does NOT create a new app frame.
   // Bricks are added one at a time with delays so the app's adaptive
   // polling picks them up for live building visualization.
 
-  server.tool(
+  server.registerTool(
     "brick_place",
-    `Place one or more bricks. Each brick appears live in the 3D viewer as it's placed. Skips bricks that collide or fall outside bounds. The baseplate is ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs. You can call this multiple times to build incrementally — e.g. foundation first, then walls, then roof.`,
     {
-      bricks: z.array(
-        z.object({
-          typeId: z.string().describe("Brick type ID from brick_read_me catalog"),
-          x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-          y: z.number().int().min(0).describe("Y position in plate-height units (0 = ground)"),
-          z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-          rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation in degrees"),
-          color: z.string().optional().default("#cc0000").describe("Hex color"),
-        }),
-      ).describe("Array of bricks to place"),
-      clearFirst: z.boolean().optional().default(false).describe("Clear scene before placing"),
+      description: "Place one or more bricks. Each brick appears live in the viewer. Call brick_render_scene first to open the viewer, then use this tool. Call brick_read_me for format reference.",
+      inputSchema: {
+        bricks: z.array(
+          z.object({
+            typeId: z.string().describe("Brick type ID from brick_read_me catalog"),
+            x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
+            y: z.number().int().min(0).describe("Y position in plate-height units (0 = ground)"),
+            z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
+            rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation in degrees"),
+            color: z.string().optional().default("#cc0000").describe("Hex color"),
+          }),
+        ).describe("Array of bricks to place"),
+        clearFirst: z.boolean().optional().default(false).describe("Clear scene before placing"),
+      },
     },
     async ({ bricks, clearFirst }) => {
       if (clearFirst) {
         scene.bricks = [];
         sceneVersion++;
       }
+      // Sort bottom-up so supports are placed before the bricks that need them
+      const sorted = [...bricks].sort((a, b) => a.y - b.y);
       let added = 0;
-      let skipped = 0;
+      const skipped: string[] = [];
       const BRICK_DELAY_MS = 80; // ms between bricks for live building effect
-      for (let i = 0; i < bricks.length; i++) {
-        const b = bricks[i];
+      for (let i = 0; i < sorted.length; i++) {
+        const b = sorted[i];
         const brickType = findBrickType(b.typeId);
         if (!brickType) {
-          skipped++;
+          skipped.push(`#${i} unknown typeId "${b.typeId}"`);
           continue;
         }
         const instance: BrickInstance = {
@@ -366,41 +522,54 @@ export function createServer(): McpServer {
           rotation: Number(b.rotation) as 0 | 90 | 180 | 270,
           color: b.color ?? "#cc0000",
         };
-        if (checkBounds(instance, brickType)) {
-          skipped++;
+        const boundsError = checkBounds(instance, brickType);
+        if (boundsError) {
+          skipped.push(`#${i} ${b.typeId} at (${b.x},${b.y},${b.z}): ${boundsError}`);
+          continue;
+        }
+        if (!checkSupport(scene.bricks, instance, brickType)) {
+          skipped.push(`#${i} ${b.typeId} at (${b.x},${b.y},${b.z}): no support — must be on baseplate (Y=0) or on top of another brick`);
           continue;
         }
         if (checkCollision(scene.bricks, instance, brickType)) {
-          skipped++;
+          skipped.push(`#${i} ${b.typeId} at (${b.x},${b.y},${b.z}): collision with existing brick`);
           continue;
         }
         scene.bricks.push(instance);
         sceneVersion++;
         added++;
         // Yield to event loop so poll requests see each brick as it's placed
-        if (i < bricks.length - 1) {
+        if (i < sorted.length - 1) {
           await new Promise(resolve => setTimeout(resolve, BRICK_DELAY_MS));
         }
       }
-      return sceneResult(`Placed ${added} bricks${skipped > 0 ? `, skipped ${skipped} (collision/invalid/out-of-bounds)` : ""}`);
+      let msg = `Placed ${added} of ${bricks.length} bricks.`;
+      if (skipped.length > 0) {
+        msg += `\nSkipped ${skipped.length}:\n${skipped.join("\n")}`;
+      }
+      return sceneResult(msg);
     },
   );
 
   // ── Tool 4: brick_get_scene (model-only, no frame) ──────────────────────
 
-  server.tool(
+  server.registerTool(
     "brick_get_scene",
-    "Returns the current scene state including all bricks and their positions. Use this to see what the user has built or to check your work.",
-    {},
+    {
+      description: "Returns the current scene state with all placed bricks.",
+      annotations: { readOnlyHint: true },
+    },
     async () => sceneResult(),
   );
 
   // ── Tool 5: brick_clear_scene (no frame) ──────────────────────────────
 
-  server.tool(
+  server.registerTool(
     "brick_clear_scene",
-    "Remove all bricks from the scene. Use this to start fresh.",
-    {},
+    {
+      description: "Remove all bricks from the scene.",
+      annotations: { destructiveHint: true },
+    },
     async () => {
       const count = scene.bricks.length;
       scene.bricks = [];
@@ -411,11 +580,14 @@ export function createServer(): McpServer {
 
   // ── Tool 6: brick_export_scene (no frame) ────────────────────────────────
 
-  server.tool(
+  server.registerTool(
     "brick_export_scene",
-    "Export the scene as JSON or a human-readable summary.",
     {
-      format: z.enum(["json", "summary"]).default("summary").describe("Export format"),
+      description: "Export the scene as JSON or a summary.",
+      inputSchema: {
+        format: z.enum(["json", "summary"]).default("summary").describe("Export format"),
+      },
+      annotations: { readOnlyHint: true },
     },
     async ({ format }) => {
       if (format === "json") {
@@ -472,7 +644,7 @@ export function createServer(): McpServer {
     async ({ typeId, x, y, z, rotation, color }) => {
       const brickType = findBrickType(typeId);
       if (!brickType) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type: ${typeId}` }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Call brick_read_me to see valid type IDs.` }) }], isError: true };
       }
       const instance: BrickInstance = {
         id: generateId(),
@@ -483,10 +655,13 @@ export function createServer(): McpServer {
       };
       const boundsError = checkBounds(instance, brickType);
       if (boundsError) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: boundsError }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): ${boundsError}` }) }], isError: true };
+      }
+      if (!checkSupport(scene.bricks, instance, brickType)) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): no support — must be on baseplate (Y=0) or resting on top of another brick` }) }], isError: true };
       }
       if (checkCollision(scene.bricks, instance, brickType)) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Collision detected — brick overlaps existing brick" }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): collision — overlaps an existing brick` }) }], isError: true };
       }
       scene.bricks.push(instance);
       sceneVersion++;
@@ -510,11 +685,26 @@ export function createServer(): McpServer {
     async ({ brickId }) => {
       const idx = scene.bricks.findIndex((b) => b.id === brickId);
       if (idx === -1) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: ${brickId}` }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". It may have already been removed. Call brick_get_scene to see current bricks.` }) }], isError: true };
       }
+      const removed = scene.bricks[idx];
       scene.bricks.splice(idx, 1);
+      // Cascade: remove any bricks left unsupported
+      let cascadeCount = 0;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const unsupported = findUnsupported(scene.bricks);
+        if (unsupported.length > 0) {
+          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+          cascadeCount += unsupported.length;
+          changed = true;
+        }
+      }
       sceneVersion++;
-      return sceneResult("Brick removed");
+      const msg = `Removed ${removed.typeId} from (${removed.position.x}, ${removed.position.y}, ${removed.position.z})` +
+        (cascadeCount > 0 ? `. Also removed ${cascadeCount} unsupported brick(s) above it.` : "");
+      return sceneResult(msg);
     },
   );
 
@@ -537,19 +727,41 @@ export function createServer(): McpServer {
     async ({ brickId, x, y, z }) => {
       const brick = scene.bricks.find((b) => b.id === brickId);
       if (!brick) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: ${brickId}` }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". It may have been removed. Call brick_get_scene to see current bricks.` }) }], isError: true };
       }
       const brickType = findBrickType(brick.typeId);
       if (!brickType) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid brick type" }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Invalid brick type "${brick.typeId}" on brick ${brickId}.` }) }], isError: true };
       }
       const moved: BrickInstance = { ...brick, position: { x, y, z } };
-      if (checkCollision(scene.bricks, moved, brickType, brickId)) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Collision at target position" }) }], isError: true };
+      const boundsError = checkBounds(moved, brickType);
+      if (boundsError) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): ${boundsError}` }) }], isError: true };
       }
+      if (!checkSupport(scene.bricks.filter(b => b.id !== brickId), moved, brickType)) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): no support — must be on baseplate (Y=0) or resting on top of another brick` }) }], isError: true };
+      }
+      if (checkCollision(scene.bricks, moved, brickType, brickId)) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): collision — overlaps an existing brick` }) }], isError: true };
+      }
+      const oldPos = { ...brick.position };
       brick.position = { x, y, z };
+      // Cascade: remove any bricks left unsupported by this move
+      let cascadeCount = 0;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const unsupported = findUnsupported(scene.bricks);
+        if (unsupported.length > 0) {
+          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+          cascadeCount += unsupported.length;
+          changed = true;
+        }
+      }
       sceneVersion++;
-      return sceneResult(`Brick moved to (${x}, ${y}, ${z})`);
+      const msg = `Moved ${brick.typeId} from (${oldPos.x},${oldPos.y},${oldPos.z}) to (${x}, ${y}, ${z})` +
+        (cascadeCount > 0 ? `. Removed ${cascadeCount} unsupported brick(s) that were above old position.` : "");
+      return sceneResult(msg);
     },
   );
 
@@ -570,19 +782,41 @@ export function createServer(): McpServer {
     async ({ brickId, rotation }) => {
       const brick = scene.bricks.find((b) => b.id === brickId);
       if (!brick) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: ${brickId}` }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". It may have been removed. Call brick_get_scene to see current bricks.` }) }], isError: true };
       }
       const brickType = findBrickType(brick.typeId);
       if (!brickType) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid brick type" }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Invalid brick type "${brick.typeId}" on brick ${brickId}.` }) }], isError: true };
       }
       const rotated: BrickInstance = { ...brick, rotation: Number(rotation) as 0 | 90 | 180 | 270 };
+      const boundsError = checkBounds(rotated, brickType);
+      if (boundsError) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: ${boundsError}` }) }], isError: true };
+      }
+      // Check self-support after rotation (footprint changes)
+      if (!checkSupport(scene.bricks.filter(b => b.id !== brickId), rotated, brickType)) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: no support after rotation — brick would float` }) }], isError: true };
+      }
       if (checkCollision(scene.bricks, rotated, brickType, brickId)) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Collision after rotation" }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: collision — overlaps an existing brick` }) }], isError: true };
       }
       brick.rotation = Number(rotation) as 0 | 90 | 180 | 270;
+      // Cascade: remove any bricks left unsupported by the footprint change
+      let cascadeCount = 0;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const unsupported = findUnsupported(scene.bricks);
+        if (unsupported.length > 0) {
+          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+          cascadeCount += unsupported.length;
+          changed = true;
+        }
+      }
       sceneVersion++;
-      return sceneResult(`Brick rotated to ${rotation}°`);
+      const msg = `Rotated ${brick.typeId} at (${brick.position.x}, ${brick.position.y}, ${brick.position.z}) to ${rotation}°` +
+        (cascadeCount > 0 ? `. Removed ${cascadeCount} unsupported brick(s) above.` : "");
+      return sceneResult(msg);
     },
   );
 
@@ -603,11 +837,11 @@ export function createServer(): McpServer {
     async ({ brickId, color }) => {
       const brick = scene.bricks.find((b) => b.id === brickId);
       if (!brick) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: ${brickId}` }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". It may have been removed. Call brick_get_scene to see current bricks.` }) }], isError: true };
       }
       brick.color = color;
       sceneVersion++;
-      return sceneResult(`Brick painted ${color}`);
+      return sceneResult(`Painted ${brick.typeId} at (${brick.position.x}, ${brick.position.y}, ${brick.position.z}) → ${color}`);
     },
   );
 
@@ -659,13 +893,28 @@ export function createServer(): McpServer {
       try {
         const imported = JSON.parse(sceneJson);
         if (!imported.name || !Array.isArray(imported.bricks)) {
-          return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid scene format" }) }], isError: true };
+          return { content: [{ type: "text" as const, text: JSON.stringify({ error: 'Invalid scene format — expected { "name": "...", "bricks": [...] }' }) }], isError: true };
         }
-        scene = imported;
+        // Validate all bricks: sort by Y and re-add with full validation
+        const raw: BrickInstance[] = imported.bricks;
+        const sorted = [...raw].sort((a, b) => a.position.y - b.position.y);
+        const valid: BrickInstance[] = [];
+        let dropped = 0;
+        for (const brick of sorted) {
+          const bt = findBrickType(brick.typeId);
+          if (!bt) { dropped++; continue; }
+          if (checkBounds(brick, bt)) { dropped++; continue; }
+          if (!checkSupport(valid, brick, bt)) { dropped++; continue; }
+          if (checkCollision(valid, brick, bt)) { dropped++; continue; }
+          valid.push(brick);
+        }
+        scene = { name: imported.name, bricks: valid };
         sceneVersion++;
-        return sceneResult(`Imported scene '${scene.name}' with ${scene.bricks.length} bricks`);
-      } catch {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Invalid JSON" }) }], isError: true };
+        const msg = `Imported scene '${scene.name}' with ${valid.length} bricks` +
+          (dropped > 0 ? ` (dropped ${dropped} invalid/floating/colliding bricks)` : "");
+        return sceneResult(msg);
+      } catch (e) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Invalid JSON: ${e instanceof Error ? e.message : "parse error"}` }) }], isError: true };
       }
     },
   );
