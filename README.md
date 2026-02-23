@@ -1,9 +1,29 @@
-# Brick Builder MCP App
-
-A Three.js MCP App for designing 3D brick constructions inside MCP-enabled hosts like Claude Desktop and VS Code. Build interactively in the 3D viewport or let the AI build structures for you through natural language.
+<div align="center">
+  <h1>Brick Builder MCP App</h1>
+  <p>
+    A Three.js MCP App for designing 3D brick constructions inside MCP-enabled hosts like Claude Desktop and Visual Studio Code.
+    <br />
+    Build interactively in the 3D viewport or let the AI build structures for you through natural language.
+    <br /><br />
+    <a href="#quick-start">Quick Start</a>
+    ·
+    <a href="#connecting-to-hosts">Connecting</a>
+    ·
+    <a href="#mcp-tools">Tools</a>
+    ·
+    <a href="#adding-new-brick-types">Extensibility</a>
+  </p>
+</div>
 
 <p align="center">
-  <img src="media/ext-apps-bricks.gif" alt="Brick Builder in action — AI building a structure in real time" width="720" />
+  <a href="https://github.com/dend/brick-mcp-app/actions/workflows/ci.yml"><img src="https://github.com/dend/brick-mcp-app/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License: MIT"></a>
+  <a href="https://github.com/dend/brick-mcp-app"><img src="https://img.shields.io/github/stars/dend/brick-mcp-app" alt="GitHub stars"></a>
+</p>
+
+<p align="center">
+  <img src="media/ext-apps-bricks.gif" alt="Brick Builder in action — AI building a structure in real time" width="600" />
+  <br /><em>Brick Builder running in Claude, building a structure through natural language</em>
 </p>
 
 ## Quick Start
@@ -33,32 +53,9 @@ The server starts at **http://localhost:3001/mcp**.
 | `npm run dev` | Watch client + serve concurrently |
 | `npm start` | Build then serve (one command) |
 
----
-
 ## Architecture
 
 The server is the **single source of truth** for all scene state. Both the AI (LLM) and the interactive UI mutate state exclusively through MCP tools. The server validates every operation — collision detection, bounds checking, support verification — and returns authoritative results.
-
-```mermaid
-graph TB
-    subgraph Host["MCP Host (Claude Desktop / VS Code)"]
-        LLM["LLM"]
-        UI["Brick Builder UI<br/>(React + Three.js iframe)"]
-    end
-
-    subgraph Server["MCP Server (Express + MCP SDK)"]
-        Tools["Tool Handlers"]
-        State["Shared Scene State<br/>collision detection<br/>bounds & support checks"]
-    end
-
-    LLM -- "brick_place, brick_clear_scene,<br/>brick_get_scene, ..." --> Tools
-    UI -- "callServerTool()<br/>brick_add, brick_remove, ..." --> Tools
-    Tools --> State
-    State -- "scene payload" --> Tools
-    Tools -- "tool result" --> LLM
-    Tools -- "tool result" --> UI
-    UI -. "polls brick_get_scene<br/>every 1s for LLM changes" .-> Tools
-```
 
 ### Key Design Decisions
 
@@ -66,76 +63,26 @@ graph TB
 - **Polling for cross-session sync**: The UI polls `brick_get_scene` every second to pick up LLM-initiated changes. User-initiated changes (via `callServerTool`) are reflected instantly.
 - **Single-brick placement**: The LLM places one brick per `brick_place` call and receives the placed brick's footprint in the response, enabling precise positioning of subsequent bricks.
 
----
-
-## How It Works
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant LLM
-    participant Server
-    participant UI as 3D Viewer
-
-    User->>LLM: "Build me a small house"
-    LLM->>Server: brick_read_me()
-    Server-->>LLM: Building guide + coordinate system
-    LLM->>Server: brick_get_available()
-    Server-->>LLM: Brick catalog (types, sizes)
-    LLM->>Server: brick_render_scene()
-    Server-->>LLM: Scene data
-    Note over UI: Iframe opens with 3D viewport
-
-    loop For each brick
-        LLM->>Server: brick_place(typeId, x, y, z, rotation, color)
-        Server->>Server: Validate bounds, support, collision
-        Server-->>LLM: {placed: {id, footprint: {minX, maxX, minZ, maxZ, topY}}}
-        Note over LLM: Uses footprint to position next brick
-    end
-
-    UI->>Server: brick_get_scene() [polling]
-    Server-->>UI: Full scene with all bricks
-    Note over UI: Three.js reconciler updates scene
-```
-
----
-
 ## Connecting to Hosts
+
+> [!TIP]
+> You can use [Cloudflare Tunnels](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) to expose your locally-hosted server to the internet. This lets you connect from claude.ai or any remote MCP host without port forwarding or VPNs:
+> ```sh
+> cloudflared tunnel --url http://localhost:3001
+> ```
+> Then use the generated `*.trycloudflare.com` URL in place of `http://localhost:3001` in the configurations below.
 
 ### Claude Desktop
 
-Claude Desktop requires a stdio bridge for local HTTP servers. Use [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) to proxy the connection.
+Claude Desktop does not natively support streamable HTTP servers through config. You need to add the server as a **custom connector** (available on paid plans):
 
-**1. Build and start the server**
+1. Open Claude Desktop settings
+2. Navigate to **Connectors** and add a new custom connector
+3. Set the URL to the hosted URL of your MCP server (if you are using Cloudflare Tunnels, append `/mcp`)
 
-```sh
-npm run build && npm run serve
-```
+### Visual Studio Code
 
-**2. Edit your Claude Desktop config**
-
-| Platform | Path |
-|----------|------|
-| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
-| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
-| Linux | `~/.config/Claude/claude_desktop_config.json` |
-
-```json
-{
-  "mcpServers": {
-    "brick-builder": {
-      "command": "npx",
-      "args": ["mcp-remote", "http://localhost:3001/mcp"]
-    }
-  }
-}
-```
-
-**3. Restart Claude Desktop** and ask Claude to *"render the brick scene"* or *"build a small house"*.
-
-### VS Code
-
-VS Code supports streamable HTTP MCP servers natively. Create `.vscode/mcp.json` in your workspace:
+Visual Studio Code supports Streamable HTTP MCP servers natively. Create `.vscode/mcp.json` in your workspace:
 
 ```json
 {
@@ -150,44 +97,9 @@ VS Code supports streamable HTTP MCP servers natively. Create `.vscode/mcp.json`
 
 Or use the Command Palette: **MCP: Add Server** > **HTTP** > `http://localhost:3001/mcp`
 
-### Claude Code (CLI)
-
-```sh
-claude mcp add --transport http brick-builder http://localhost:3001/mcp
-```
-
----
-
 ## MCP Tools
 
-```mermaid
-graph LR
-    subgraph Model["LLM-facing tools"]
-        read_me["brick_read_me"]
-        get_avail["brick_get_available"]
-        render["brick_render_scene"]
-        place["brick_place"]
-        get_scene["brick_get_scene"]
-        clear["brick_clear_scene"]
-        export["brick_export_scene"]
-    end
-
-    subgraph App["App-only tools (UI)"]
-        add["brick_add"]
-        remove["brick_remove"]
-        move["brick_move"]
-        rotate["brick_rotate"]
-        paint["brick_paint"]
-        camera["brick_set_camera"]
-        import_s["brick_import_scene"]
-        set_name["brick_set_scene_name"]
-        catalog["brick_get_catalog"]
-    end
-
-    render -.->|"opens iframe"| App
-```
-
-### LLM Tools
+The following tools are accessible from whatever client you're using to interact with the app.
 
 | Tool | Description |
 |------|-------------|
@@ -198,22 +110,6 @@ graph LR
 | `brick_get_scene` | Read the current scene state with all bricks and their footprints |
 | `brick_clear_scene` | Remove all bricks from the scene |
 | `brick_export_scene` | Export as JSON or a human-readable summary |
-
-### UI Tools (app-only, called via `callServerTool`)
-
-| Tool | Description |
-|------|-------------|
-| `brick_add` | Add a single brick (click-to-place) |
-| `brick_remove` | Remove a brick by ID |
-| `brick_move` | Move a brick to a new position |
-| `brick_rotate` | Set a brick's rotation (0/90/180/270) |
-| `brick_paint` | Change a brick's color |
-| `brick_set_camera` | Set camera position and target |
-| `brick_import_scene` | Import a scene from JSON |
-| `brick_set_scene_name` | Set the scene's display name |
-| `brick_get_catalog` | Fetch the available brick types for the UI |
-
----
 
 ## Interactive UI
 
@@ -241,9 +137,10 @@ The 3D viewport supports seven interaction modes, switchable via the toolbar or 
 | `Delete` | Remove the selected brick |
 | `Escape` | Deselect / cancel drag |
 
----
-
 ## Brick Types
+
+> [!NOTE]
+> This list is not final — more brick types will be added over time. See [Adding New Brick Types](#adding-new-brick-types) for how to contribute new types.
 
 20 brick types across three categories:
 
@@ -255,27 +152,17 @@ The 3D viewport supports seven interaction modes, switchable via the toolbar or 
 
 ### Coordinate System
 
+>[!NOTE]
+>I might expand this further (or get rid of the baseplate altogether) in the future. The current setup is very much experimental.
+
 - **Baseplate**: 48 x 48 studs (X and Z axes)
 - **Y axis**: Height in plate units (1 standard brick = 3 Y units)
 - **Rotation**: 0, 90, 180, or 270 degrees (swaps X/Z dimensions)
 - All positions are integers snapped to the stud grid
 
----
-
 ## Adding New Brick Types
 
 Adding a new brick requires just two files. The catalog, server validation, geometry rendering, and UI selector all pick it up automatically.
-
-```mermaid
-graph LR
-    Def["1. Definition file<br/><code>src/bricks/definitions/</code>"] --> Index["2. Export from index<br/><code>definitions/index.ts</code>"]
-    Index --> Catalog["Catalog auto-populates"]
-    Catalog --> Server["Server validation<br/>(collision, bounds, support)"]
-    Catalog --> LLM["LLM tools<br/>(brick_get_available)"]
-    Catalog --> UI["UI brick selector"]
-    Catalog --> Geo["Geometry builder<br/>(by category)"]
-    Geo --> Render["Three.js rendering"]
-```
 
 ### Step 1: Create the definition
 
@@ -332,28 +219,21 @@ Add one line to `src/bricks/definitions/index.ts`:
 export { default as brick_3x2 } from './brick_3x2.js';
 ```
 
-### That's it
+### Checklist
 
 The brick is now:
+
 - In `BRICK_CATALOG` (auto-populated from exports)
 - Available to the LLM via `brick_get_available` and `brick_place`
 - Shown in the UI brick selector panel
 - Validated by server-side collision, bounds, and support checks
 - Rendered with auto-generated geometry based on `category`
 
-No changes to `server.ts`, `BrickBuilder.tsx`, or any other file.
+No changes to `server.ts`, `BrickBuilder.tsx`, or any other file are needed to make things happen.
 
 ### How categories map to geometry
 
 The `category` field determines which geometry builder creates the 3D model:
-
-```mermaid
-graph LR
-    B["'brick' or 'plate'"] --> Std["Standard geometry<br/>walls + studs + tubes"]
-    S["'slope'"] --> Slp["Slope geometry<br/>pentagon cross-section + partial studs"]
-    T["'technic'"] --> Tch["Technic geometry<br/>walls with pin holes + studs"]
-    C["'corner'"] --> Crn["Corner geometry<br/>L-shaped body + partial studs"]
-```
 
 | Category | Height convention | Geometry |
 |----------|-------------------|----------|
@@ -383,8 +263,6 @@ To add an entirely new geometry style:
 | 1 plate unit (Y) | 0.4 | 3.2 mm |
 | 1 standard brick (Y) | 1.2 (3 plates) | 9.6 mm |
 
----
-
 ## Testing with basic-host
 
 You can test the app locally using the MCP Apps SDK basic-host:
@@ -400,8 +278,6 @@ npm install
 SERVERS='["http://localhost:3001/mcp"]' npm run start
 # Open http://localhost:8080
 ```
-
----
 
 ## License
 
