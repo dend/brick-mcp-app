@@ -106,6 +106,7 @@ The following tools are accessible from whatever client you're using to interact
 | `brick_render_scene` | Opens the 3D viewer iframe (must call before placing bricks) |
 | `brick_place` | Place a single brick. Returns placed brick with footprint for precise adjacent positioning |
 | `brick_get_scene` | Read the current scene state with all bricks and their footprints |
+| `brick_remove_brick` | Remove a single brick by ID. Cascades to remove unsupported bricks above it |
 | `brick_clear_scene` | Remove all bricks from the scene |
 | `brick_export_scene` | Export as JSON or a human-readable summary |
 

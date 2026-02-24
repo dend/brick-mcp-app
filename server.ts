@@ -240,7 +240,8 @@ You only need to call brick_read_me once. Do NOT call it again — you will not 
 3. brick_render_scene → Call BEFORE placing any bricks. This opens the 3D viewer for the user. If you skip this step, the user cannot see anything you build.
 4. brick_place → Now you can place bricks. Each brick appears live in the viewer as it's placed.
 5. brick_get_scene → Call anytime to inspect what's currently built
-6. brick_clear_scene → Call to remove all bricks and start over
+6. brick_remove_brick → Remove a specific brick by ID (use brick_get_scene to find IDs). Also removes unsupported bricks above it.
+7. brick_clear_scene → Call to remove all bricks and start over
 
 CRITICAL: You must call brick_render_scene before your first brick_place call. Placing bricks without rendering the scene first means the user has no viewer open and sees nothing.
 
@@ -565,7 +566,53 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 7: brick_export_scene (no frame) ────────────────────────────────
+  // ── Tool 7: brick_remove_brick (model-facing, no UI metadata) ──────────
+
+  server.registerTool(
+    "brick_remove_brick",
+    {
+      description: "Remove a single brick by its ID. Use brick_get_scene to find brick IDs. Also removes any bricks that lose support as a result.",
+      inputSchema: {
+        brickId: z.string().describe("ID of the brick to remove (from brick_get_scene or brick_place response)"),
+      },
+      annotations: { destructiveHint: true },
+    },
+    async ({ brickId }) => {
+      const idx = scene.bricks.findIndex((b) => b.id === brickId);
+      if (idx === -1) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". Call brick_get_scene to see current brick IDs.` }) }],
+          isError: true,
+        };
+      }
+      const removed = scene.bricks[idx];
+      scene.bricks.splice(idx, 1);
+      // Cascade: remove any bricks left unsupported
+      let cascadeCount = 0;
+      let changed = true;
+      while (changed) {
+        changed = false;
+        const unsupported = findUnsupported(scene.bricks);
+        if (unsupported.length > 0) {
+          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+          cascadeCount += unsupported.length;
+          changed = true;
+        }
+      }
+      const msg = `Removed ${removed.typeId} from (${removed.position.x}, ${removed.position.y}, ${removed.position.z})` +
+        (cascadeCount > 0 ? `. Also removed ${cascadeCount} unsupported brick(s) above it.` : "");
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          removed: { id: removed.id, typeId: removed.typeId, position: removed.position },
+          cascadeRemoved: cascadeCount,
+          totalBricks: scene.bricks.length,
+          message: msg,
+        }) }],
+      };
+    },
+  );
+
+  // ── Tool 8: brick_export_scene (no frame) ────────────────────────────────
 
   server.registerTool(
     "brick_export_scene",
