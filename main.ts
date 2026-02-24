@@ -65,6 +65,16 @@ export async function startStreamableHTTPServer(
       return;
     }
 
+    // Session ID was provided but not found — reject with 404 per MCP spec
+    if (sessionId) {
+      res.status(404).json({
+        jsonrpc: "2.0",
+        error: { code: -32001, message: "Session not found" },
+        id: null,
+      });
+      return;
+    }
+
     // New session: create a fresh server + stateful transport
     const server = createServer();
     const transport = new StreamableHTTPServerTransport({

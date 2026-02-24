@@ -272,6 +272,7 @@ const BRICK_CATALOG = {
   technic_1x8: { category: CAT.TECHNIC, studsX: 1, studsZ: 8, heightUnits: 3 },
   technic_2x4: { category: CAT.TECHNIC, studsX: 2, studsZ: 4, heightUnits: 3 },
   corner_2x2:  { category: CAT.CORNER,  studsX: 2, studsZ: 2, heightUnits: 1 },
+  corner_3x3:  { category: CAT.CORNER,  studsX: 3, studsZ: 3, heightUnits: 3 },
 };
 
 // ── Three.js Scene Setup ─────────────────────────────────────────────────────
@@ -432,14 +433,14 @@ function createBrickMesh(brick) {
     slopeGeo.translate(-w / 2, 0, 0);
     parts.push(slopeGeo);
   } else if (cat === CAT.CORNER) {
-    // L-shaped body: two overlapping boxes, notch at +X,+Z before rotation
-    // Arm 1: full width, bottom half of Z
-    const arm1 = new THREE.BoxGeometry(w, h, d / 2);
-    arm1.translate(0, 0, -d / 4);
+    // L-shaped body: 1-stud-wide arms, notch at +X,+Z before rotation
+    // Arm 1: full width, 1-stud front row
+    const arm1 = new THREE.BoxGeometry(w, h, STUD_SIZE);
+    arm1.translate(0, 0, -(d - STUD_SIZE) / 2);
     parts.push(arm1);
-    // Arm 2: left half of X, top half of Z
-    const arm2 = new THREE.BoxGeometry(w / 2, h, d / 2);
-    arm2.translate(-w / 4, 0, d / 4);
+    // Arm 2: 1-stud wide left column, remaining depth
+    const arm2 = new THREE.BoxGeometry(STUD_SIZE, h, d - STUD_SIZE);
+    arm2.translate(-(w - STUD_SIZE) / 2, 0, STUD_SIZE / 2);
     parts.push(arm2);
   } else {
     // ── Top plate (shared by regular + technic) ──
@@ -588,8 +589,8 @@ function createBrickMesh(brick) {
 
     for (let sx = 0; sx < studsX; sx++) {
       for (let sz = 0; sz < studsZ; sz++) {
-        // Skip notch corner for L-shaped corner pieces
-        if (cat === CAT.CORNER && sx === studsX - 1 && sz === studsZ - 1) continue;
+        // Skip notch region for L-shaped corner pieces (sx >= 1 && sz >= 1)
+        if (cat === CAT.CORNER && sx >= 1 && sz >= 1) continue;
         // Slopes: studs only on the back row (sz === 0, the flat full-height side)
         if (cat === CAT.SLOPE && sz !== 0) continue;
         const stud = baseStudGeo.clone();
@@ -772,6 +773,10 @@ async function refreshScene() {
 // ── Connection ───────────────────────────────────────────────────────────────
 
 window.initSession = async function() {
+  // Reset stale state from any previous (failed) connection attempt
+  sessionId = null;
+  requestId = 0;
+
   try {
     log('Connecting...', 'info');
     const resp = await mcpRequest({
@@ -793,6 +798,29 @@ window.initSession = async function() {
     document.getElementById('connStatus').className = 'status connected';
     document.getElementById('sessionInfo').textContent = sessionId?.slice(0, 8) + '...';
     log(`Connected: ${sessionId}`, 'pass');
+
+    // Sync brick catalog from server so newly added types appear automatically
+    try {
+      const catResp = await callTool('brick_get_available');
+      const catPayload = parseToolPayload(catResp.body);
+      if (catPayload?.catalog) {
+        let added = 0;
+        for (const [category, types] of Object.entries(catPayload.catalog)) {
+          for (const t of types) {
+            if (!BRICK_CATALOG[t.typeId]) {
+              BRICK_CATALOG[t.typeId] = { category, studsX: t.studsX, studsZ: t.studsZ, heightUnits: t.heightUnits };
+              added++;
+            }
+          }
+        }
+        if (added) {
+          rebuildTypeDropdown();
+          log(`Synced catalog: ${added} new type(s) from server`, 'info');
+        }
+      }
+    } catch (e) {
+      log(`Catalog sync failed: ${e.message}`, 'warn');
+    }
 
     await refreshScene();
   } catch (e) {
@@ -1107,13 +1135,18 @@ const cursorOverlay = document.getElementById('cursorOverlay');
 
 // Brick type dropdown
 const placeTypeSelect = document.getElementById('placeType');
-for (const typeId of Object.keys(BRICK_CATALOG)) {
-  const opt = document.createElement('option');
-  opt.value = typeId;
-  opt.textContent = typeId.replace('_', ' ');
-  placeTypeSelect.appendChild(opt);
+function rebuildTypeDropdown() {
+  const prev = placeTypeSelect.value || placeTypeId;
+  placeTypeSelect.innerHTML = '';
+  for (const typeId of Object.keys(BRICK_CATALOG)) {
+    const opt = document.createElement('option');
+    opt.value = typeId;
+    opt.textContent = typeId.replace('_', ' ');
+    placeTypeSelect.appendChild(opt);
+  }
+  placeTypeSelect.value = (prev in BRICK_CATALOG) ? prev : placeTypeId;
 }
-placeTypeSelect.value = placeTypeId;
+rebuildTypeDropdown();
 placeTypeSelect.addEventListener('change', (e) => { placeTypeId = e.target.value; });
 
 // Color palette
@@ -1143,6 +1176,29 @@ function getBrickAABB(brick) {
   return { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
 }
 
+// Return the physical footprint AABBs (L-shape arms for corners, full AABB otherwise).
+function getPhysicalFootprintHarness(typeId, x, y, z, rotation) {
+  const cat = BRICK_CATALOG[typeId];
+  if (!cat) return [];
+  const aabb = getBrickAABB({ typeId, position: { x, y, z }, rotation });
+  if (!aabb) return [];
+  if (cat.category !== CAT.CORNER) return [aabb];
+
+  const n = cat.studsX;
+  const rowAtZMax = rotation === 90 || rotation === 180;
+  const colAtXMax = rotation === 180 || rotation === 270;
+  const rowArm = {
+    minX: x, maxX: x + n, minY: aabb.minY, maxY: aabb.maxY,
+    minZ: rowAtZMax ? z + n - 1 : z, maxZ: rowAtZMax ? z + n : z + 1,
+  };
+  const colArm = {
+    minX: colAtXMax ? x + n - 1 : x, maxX: colAtXMax ? x + n : x + 1,
+    minY: aabb.minY, maxY: aabb.maxY,
+    minZ: rowAtZMax ? z : z + 1, maxZ: rowAtZMax ? z + n - 1 : z + n,
+  };
+  return [rowArm, colArm];
+}
+
 function aabbOverlap(a, b) {
   return a.minX < b.maxX && a.maxX > b.minX &&
          a.minY < b.maxY && a.maxY > b.minY &&
@@ -1152,13 +1208,15 @@ function aabbOverlap(a, b) {
 function checkCollisionClient(bricks, typeId, x, y, z, rotation) {
   const cat = BRICK_CATALOG[typeId];
   if (!cat) return true;
-  const isRotated = rotation === 90 || rotation === 270;
-  const sx = isRotated ? cat.studsZ : cat.studsX;
-  const sz = isRotated ? cat.studsX : cat.studsZ;
-  const candidate = { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
+  const candidateFootprint = getPhysicalFootprintHarness(typeId, x, y, z, rotation);
   for (const existing of bricks) {
-    const eb = getBrickAABB(existing);
-    if (eb && aabbOverlap(candidate, eb)) return true;
+    const existFootprint = getPhysicalFootprintHarness(
+      existing.typeId, existing.position.x, existing.position.y, existing.position.z, existing.rotation);
+    for (const cf of candidateFootprint) {
+      for (const ef of existFootprint) {
+        if (aabbOverlap(cf, ef)) return true;
+      }
+    }
   }
   return false;
 }
@@ -1223,21 +1281,29 @@ function raycastPlacement(event) {
     }
   }
 
-  // Auto-elevate: if the new brick's footprint overlaps any existing brick,
-  // place on top of the highest overlapping brick
+  // Auto-elevate: if the new brick's physical footprint overlaps any existing brick's
+  // physical footprint, place on top of the highest overlapping brick.
+  // Uses L-shape footprint for corners so we don't elevate over notch areas.
   const placeCat = BRICK_CATALOG[placeTypeId];
   if (placeCat) {
-    const isRotated = placeRotation === 90 || placeRotation === 270;
-    const sx = isRotated ? placeCat.studsZ : placeCat.studsX;
-    const sz = isRotated ? placeCat.studsX : placeCat.studsZ;
+    const newFootprint = getPhysicalFootprintHarness(placeTypeId, gridX, 0, gridZ, placeRotation);
     for (const existing of currentBricks) {
       const et = BRICK_CATALOG[existing.typeId];
       if (!et) continue;
-      const eRot = existing.rotation === 90 || existing.rotation === 270;
-      const esx = eRot ? et.studsZ : et.studsX;
-      const esz = eRot ? et.studsX : et.studsZ;
-      if (gridX < existing.position.x + esx && gridX + sx > existing.position.x &&
-          gridZ < existing.position.z + esz && gridZ + sz > existing.position.z) {
+      const existFootprint = getPhysicalFootprintHarness(
+        existing.typeId, existing.position.x, existing.position.y, existing.position.z, existing.rotation);
+      let overlaps = false;
+      for (const nf of newFootprint) {
+        for (const ef of existFootprint) {
+          // Check XZ overlap only (ignore Y for elevation purposes)
+          if (nf.minX < ef.maxX && nf.maxX > ef.minX &&
+              nf.minZ < ef.maxZ && nf.maxZ > ef.minZ) {
+            overlaps = true; break;
+          }
+        }
+        if (overlaps) break;
+      }
+      if (overlaps) {
         const topY = existing.position.y + et.heightUnits;
         if (topY > gridY) gridY = topY;
       }
@@ -1279,12 +1345,12 @@ function createGhostMesh(typeId, rotation) {
     slopeGeo.translate(-w / 2, 0, 0);
     parts.push(slopeGeo);
   } else if (catType === CAT.CORNER) {
-    // L-shaped body: notch at +X,+Z before rotation
-    const arm1 = new THREE.BoxGeometry(w, h, d / 2);
-    arm1.translate(0, 0, -d / 4);
+    // L-shaped body: 1-stud-wide arms, notch at +X,+Z before rotation
+    const arm1 = new THREE.BoxGeometry(w, h, STUD_SIZE);
+    arm1.translate(0, 0, -(d - STUD_SIZE) / 2);
     parts.push(arm1);
-    const arm2 = new THREE.BoxGeometry(w / 2, h, d / 2);
-    arm2.translate(-w / 4, 0, d / 4);
+    const arm2 = new THREE.BoxGeometry(STUD_SIZE, h, d - STUD_SIZE);
+    arm2.translate(-(w - STUD_SIZE) / 2, 0, STUD_SIZE / 2);
     parts.push(arm2);
   } else {
     parts.push(new THREE.BoxGeometry(w, h, d));
@@ -1293,7 +1359,7 @@ function createGhostMesh(typeId, rotation) {
   const studGeo = new THREE.CylinderGeometry(STUD_DIAMETER / 2, STUD_DIAMETER / 2, STUD_HEIGHT, 8);
   for (let sx = 0; sx < studsX; sx++) {
     for (let sz = 0; sz < studsZ; sz++) {
-      if (catType === CAT.CORNER && sx === studsX - 1 && sz === studsZ - 1) continue;
+      if (catType === CAT.CORNER && sx >= 1 && sz >= 1) continue;
       if (catType === CAT.SLOPE && sz !== 0) continue;
       const s = studGeo.clone();
       s.translate(

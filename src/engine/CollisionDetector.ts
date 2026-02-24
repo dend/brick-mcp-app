@@ -13,6 +13,33 @@ export function getBrickAABB(brick: BrickInstance, brickType: BrickType): AABB {
   };
 }
 
+// Return the physical footprint AABBs for a brick (L-shape arms for corners, full AABB otherwise).
+function getPhysicalFootprint(brick: BrickInstance, brickType: BrickType): AABB[] {
+  const aabb = getBrickAABB(brick, brickType);
+  if (brickType.category !== 'corner') return [aabb];
+
+  const { x, z } = brick.position;
+  const n = brickType.studsX;
+  const rot = brick.rotation;
+  const rowAtZMax = rot === 90 || rot === 180;
+  const colAtXMax = rot === 180 || rot === 270;
+
+  const rowArm: AABB = {
+    minX: x, maxX: x + n,
+    minY: aabb.minY, maxY: aabb.maxY,
+    minZ: rowAtZMax ? z + n - 1 : z,
+    maxZ: rowAtZMax ? z + n : z + 1,
+  };
+  const colArm: AABB = {
+    minX: colAtXMax ? x + n - 1 : x,
+    maxX: colAtXMax ? x + n : x + 1,
+    minY: aabb.minY, maxY: aabb.maxY,
+    minZ: rowAtZMax ? z : z + 1,
+    maxZ: rowAtZMax ? z + n - 1 : z + n,
+  };
+  return [rowArm, colArm];
+}
+
 function aabbOverlap(a: AABB, b: AABB): boolean {
   return (
     a.minX < b.maxX && a.maxX > b.minX &&
@@ -92,6 +119,7 @@ function hasStudSupport(
 }
 
 // Check if a brick has physical support — on baseplate (Y=0) or resting on another brick.
+// Uses L-shape footprint for corner pieces instead of full AABB.
 export function checkSupportClient(
   bricks: BrickInstance[],
   typeId: string,
@@ -111,14 +139,21 @@ export function checkSupportClient(
   };
   const aabb = getBrickAABB(candidate, brickType);
   if (aabb.minY === 0) return true; // On baseplate
+
+  const newFootprint = getPhysicalFootprint(candidate, brickType);
   for (const existing of bricks) {
     const et = getBrickType(existing.typeId);
     if (!et) continue;
     const ea = getBrickAABB(existing, et);
-    if (ea.maxY === aabb.minY &&
-        ea.minX < aabb.maxX && ea.maxX > aabb.minX &&
-        ea.minZ < aabb.maxZ && ea.maxZ > aabb.minZ) {
-      return true;
+    if (ea.maxY !== aabb.minY) continue;
+    const existFootprint = getPhysicalFootprint(existing, et);
+    for (const nf of newFootprint) {
+      for (const ef of existFootprint) {
+        if (nf.minX < ef.maxX && nf.maxX > ef.minX &&
+            nf.minZ < ef.maxZ && nf.maxZ > ef.minZ) {
+          return true;
+        }
+      }
     }
   }
   return false;
@@ -146,12 +181,23 @@ export function checkCollisionClient(
   const candidateAABB = getBrickAABB(candidate, brickType);
   const candidateBlockouts = getBlockoutAABBs(candidate, brickType);
 
+  const candidateFootprint = getPhysicalFootprint(candidate, brickType);
+
   for (const existing of bricks) {
     if (excludeId && existing.id === excludeId) continue;
     const existType = getBrickType(existing.typeId);
     if (!existType) continue;
     const existAABB = getBrickAABB(existing, existType);
-    if (aabbOverlap(candidateAABB, existAABB)) {
+    // Use physical footprint overlap (L-shape aware) instead of AABB
+    const existFootprint = getPhysicalFootprint(existing, existType);
+    let hasPhysicalOverlap = false;
+    for (const cf of candidateFootprint) {
+      for (const ef of existFootprint) {
+        if (aabbOverlap(cf, ef)) { hasPhysicalOverlap = true; break; }
+      }
+      if (hasPhysicalOverlap) break;
+    }
+    if (hasPhysicalOverlap) {
       return true;
     }
     // Candidate sits in an existing brick's block-out zone

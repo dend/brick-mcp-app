@@ -17,7 +17,7 @@ export function createHollowStuds(
   studsZ: number,
   h: number,
   opts?: {
-    skipCorner?: boolean;  // skip stud at (studsX-1, studsZ-1) for corner pieces
+    skipNotch?: { fromX: number; fromZ: number };  // skip studs where sx >= fromX && sz >= fromZ
     onlyRow?: number;      // only place studs on this Z row index
   },
 ): THREE.BufferGeometry[] {
@@ -38,7 +38,7 @@ export function createHollowStuds(
 
   for (let sx = 0; sx < studsX; sx++) {
     for (let sz = 0; sz < studsZ; sz++) {
-      if (opts?.skipCorner && sx === studsX - 1 && sz === studsZ - 1) continue;
+      if (opts?.skipNotch && sx >= opts.skipNotch.fromX && sz >= opts.skipNotch.fromZ) continue;
       if (opts?.onlyRow !== undefined && sz !== opts.onlyRow) continue;
       const stud = baseStudGeo.clone();
       stud.translate(

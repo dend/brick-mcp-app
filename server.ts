@@ -55,6 +55,39 @@ function getBrickAABB(brick: BrickInstance, brickType: BrickDefinition): AABB {
   };
 }
 
+// Return the physical footprint AABBs for a brick (L-shape arms for corners, full AABB otherwise).
+// Used for support checks so bricks can't float over a corner's notch.
+function getPhysicalFootprint(brick: BrickInstance, brickType: BrickDefinition): AABB[] {
+  const aabb = getBrickAABB(brick, brickType);
+  if (brickType.category !== 'corner') return [aabb];
+
+  const { x, z } = brick.position;
+  const n = brickType.studsX; // corners are square NxN
+  const rot = brick.rotation;
+  // Rotation determines which corner the notch occupies:
+  //   rot=0 → notch at +X,+Z     rot=90 → notch at +X,−Z
+  //   rot=180 → notch at −X,−Z   rot=270 → notch at −X,+Z
+  const rowAtZMax = rot === 90 || rot === 180;
+  const colAtXMax = rot === 180 || rot === 270;
+
+  // Row arm: full width (N studs), 1-stud depth
+  const rowArm: AABB = {
+    minX: x, maxX: x + n,
+    minY: aabb.minY, maxY: aabb.maxY,
+    minZ: rowAtZMax ? z + n - 1 : z,
+    maxZ: rowAtZMax ? z + n : z + 1,
+  };
+  // Column arm: 1-stud width, remaining depth (N-1 studs)
+  const colArm: AABB = {
+    minX: colAtXMax ? x + n - 1 : x,
+    maxX: colAtXMax ? x + n : x + 1,
+    minY: aabb.minY, maxY: aabb.maxY,
+    minZ: rowAtZMax ? z : z + 1,
+    maxZ: rowAtZMax ? z + n - 1 : z + n,
+  };
+  return [rowArm, colArm];
+}
+
 function aabbOverlap(a: AABB, b: AABB): boolean {
   return (
     a.minX < b.maxX && a.maxX > b.minX &&
@@ -133,6 +166,18 @@ function hasStudSupport(
   return true;
 }
 
+// Check if two bricks' physical footprints overlap (L-shape aware).
+function physicalOverlap(a: BrickInstance, aType: BrickDefinition, b: BrickInstance, bType: BrickDefinition): boolean {
+  const aFoot = getPhysicalFootprint(a, aType);
+  const bFoot = getPhysicalFootprint(b, bType);
+  for (const af of aFoot) {
+    for (const bf of bFoot) {
+      if (aabbOverlap(af, bf)) return true;
+    }
+  }
+  return false;
+}
+
 function checkCollision(
   bricks: BrickInstance[],
   newBrick: BrickInstance,
@@ -146,7 +191,8 @@ function checkCollision(
     const existType = findBrickType(existing.typeId);
     if (!existType) continue;
     const existAABB = getBrickAABB(existing, existType);
-    if (aabbOverlap(newAABB, existAABB)) {
+    // Use physical footprint overlap (L-shape aware) instead of AABB
+    if (physicalOverlap(newBrick, newType, existing, existType)) {
       return true;
     }
     // New brick sits in an existing brick's block-out zone
@@ -187,19 +233,27 @@ function checkBounds(brick: BrickInstance, brickType: BrickDefinition): string |
 }
 
 // Verify a brick is supported — either on the baseplate (Y=0) or resting on
-// another brick's top face with XZ overlap (no floating bricks).
+// another brick's top face with physical footprint overlap (no floating bricks).
+// Uses L-shape footprint for corner pieces instead of full AABB.
 function checkSupport(bricks: BrickInstance[], brick: BrickInstance, brickType: BrickDefinition): boolean {
   const aabb = getBrickAABB(brick, brickType);
   if (aabb.minY === 0) return true; // On baseplate
+
+  const newFootprint = getPhysicalFootprint(brick, brickType);
   for (const existing of bricks) {
     const et = findBrickType(existing.typeId);
     if (!et) continue;
     const ea = getBrickAABB(existing, et);
-    // Existing brick's top touches new brick's bottom, with XZ overlap
-    if (ea.maxY === aabb.minY &&
-        ea.minX < aabb.maxX && ea.maxX > aabb.minX &&
-        ea.minZ < aabb.maxZ && ea.maxZ > aabb.minZ) {
-      return true;
+    if (ea.maxY !== aabb.minY) continue; // Must be directly below
+    // Check physical footprints overlap (not just AABBs)
+    const existFootprint = getPhysicalFootprint(existing, et);
+    for (const nf of newFootprint) {
+      for (const ef of existFootprint) {
+        if (nf.minX < ef.maxX && nf.maxX > ef.minX &&
+            nf.minZ < ef.maxZ && nf.maxZ > ef.minZ) {
+          return true;
+        }
+      }
     }
   }
   return false;

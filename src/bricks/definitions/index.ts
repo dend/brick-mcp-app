@@ -33,3 +33,4 @@ export { default as technic_1x6 } from './technic_1x6.js';
 export { default as technic_1x8 } from './technic_1x8.js';
 export { default as technic_2x4 } from './technic_2x4.js';
 export { default as corner_2x2 } from './corner_2x2.js';
+export { default as corner_3x3 } from './corner_3x3.js';
