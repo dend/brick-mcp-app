@@ -6,7 +6,7 @@ const corner_2x2: BrickDefinition = {
   category: 'corner',
   studsX: 2,
   studsZ: 2,
-  heightUnits: 1,
+  heightUnits: 3,
 };
 
 export default corner_2x2;
