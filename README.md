@@ -1,9 +1,7 @@
 <div align="center">
   <h1>Brick Builder MCP App</h1>
   <p>
-    A Three.js MCP App for designing 3D brick constructions inside MCP-enabled hosts like Claude Desktop and Visual Studio Code.
-    <br />
-    Build interactively in the 3D viewport or let the AI build structures for you through natural language.
+    A Three.js MCP App for designing 3D brick constructions inside MCP-enabled hosts like Claude Desktop and Visual Studio Code. Build interactively or let the AI build structures for you through natural language.
     <br /><br />
     <a href="#quick-start">Quick Start</a>
     ·
@@ -263,9 +261,21 @@ To add an entirely new geometry style:
 | 1 plate unit (Y) | 0.4 | 3.2 mm |
 | 1 standard brick (Y) | 1.2 (3 plates) | 9.6 mm |
 
-## Testing with basic-host
+## Local Testing
 
-You can test the app locally using the MCP Apps SDK basic-host:
+### Test harness
+
+The project includes a built-in visual test harness for testing MCP tools without a host. Start the server and navigate to:
+
+```
+http://localhost:3001/test
+```
+
+The harness connects directly to the MCP server and provides a sidebar with buttons for every tool — render the scene, place bricks, clear, export, etc. The 3D viewport is embedded alongside so you can see results immediately.
+
+### basic-host
+
+You can also test using the MCP Apps SDK basic-host, which simulates the full host environment (iframe, postMessage, `callServerTool`):
 
 ```sh
 # Terminal 1: start the server
