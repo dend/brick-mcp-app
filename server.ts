@@ -10,7 +10,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import type { BrickDefinition } from "./src/bricks/types.js";
-import { BRICK_CATALOG, getBrickType } from "./src/bricks/catalog.js";
 import { parseLDrawPart, setLDrawDir } from "./src/ldraw/ldraw-dimensions.js";
 
 // Initialize LDraw directory for the server-side parser
@@ -25,8 +24,24 @@ const DIST_DIR = import.meta.filename.endsWith(".ts")
   : import.meta.dirname;
 
 function findBrickType(typeId: string): BrickDefinition | undefined {
-  return getBrickType(typeId) ?? parseLDrawPart(typeId) ?? undefined;
+  return parseLDrawPart(typeId) ?? undefined;
 }
+
+// Popular LDraw part IDs for brick_get_available
+const POPULAR_PART_IDS = [
+  // Standard Bricks
+  '3005', '3004', '3622', '3010', '3009', '3008',
+  '3003', '3002', '3001', '2456', '3007',
+  // Plates
+  '3024', '3023', '3710', '3022', '3020', '3795',
+  '3031', '3958', '3036', '3035', '4477',
+  // Slopes
+  '3039', '3040', '3665', '3660',
+  // Technic
+  '3700', '3701', '3894', '3702', '3709',
+  // Corner
+  '2357', '2462',
+];
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -63,127 +78,12 @@ function getBrickAABB(brick: BrickInstance, brickType: BrickDefinition): AABB {
   };
 }
 
-// Return the physical footprint AABBs for a brick (L-shape arms for corners, full AABB otherwise).
-// Used for support checks so bricks can't float over a corner's notch.
-function getPhysicalFootprint(brick: BrickInstance, brickType: BrickDefinition): AABB[] {
-  const aabb = getBrickAABB(brick, brickType);
-  if (brickType.category !== 'corner') return [aabb];
-
-  const { x, z } = brick.position;
-  const n = brickType.studsX; // corners are square NxN
-  const rot = brick.rotation;
-  // Rotation determines which corner the notch occupies:
-  //   rot=0 → notch at +X,+Z     rot=90 → notch at +X,−Z
-  //   rot=180 → notch at −X,−Z   rot=270 → notch at −X,+Z
-  const rowAtZMax = rot === 90 || rot === 180;
-  const colAtXMax = rot === 180 || rot === 270;
-
-  // Row arm: full width (N studs), 1-stud depth
-  const rowArm: AABB = {
-    minX: x, maxX: x + n,
-    minY: aabb.minY, maxY: aabb.maxY,
-    minZ: rowAtZMax ? z + n - 1 : z,
-    maxZ: rowAtZMax ? z + n : z + 1,
-  };
-  // Column arm: 1-stud width, remaining depth (N-1 studs)
-  const colArm: AABB = {
-    minX: colAtXMax ? x + n - 1 : x,
-    maxX: colAtXMax ? x + n : x + 1,
-    minY: aabb.minY, maxY: aabb.maxY,
-    minZ: rowAtZMax ? z : z + 1,
-    maxZ: rowAtZMax ? z + n - 1 : z + n,
-  };
-  return [rowArm, colArm];
-}
-
 function aabbOverlap(a: AABB, b: AABB): boolean {
   return (
     a.minX < b.maxX && a.maxX > b.minX &&
     a.minY < b.maxY && a.maxY > b.minY &&
     a.minZ < b.maxZ && a.maxZ > b.minZ
   );
-}
-
-// Compute world-space block-out AABBs from a brick's definition, applying rotation.
-function getBlockoutAABBs(brick: BrickInstance, brickType: BrickDefinition): AABB[] {
-  if (!brickType.blockout?.length) return [];
-  const { x, y, z } = brick.position;
-  const cx = brickType.studsX / 2;
-  const cz = brickType.studsZ / 2;
-  const topY = y + brickType.heightUnits;
-  const rotRad = -(brick.rotation * Math.PI) / 180;
-  const cos = Math.cos(rotRad);
-  const sin = Math.sin(rotRad);
-
-  return brickType.blockout.map(bo => {
-    // Rotate the 4 corners of the blockout footprint around the brick center
-    const corners: [number, number][] = [
-      [bo.minX - cx, bo.minZ - cz],
-      [bo.maxX - cx, bo.minZ - cz],
-      [bo.minX - cx, bo.maxZ - cz],
-      [bo.maxX - cx, bo.maxZ - cz],
-    ];
-    let rMinX = Infinity, rMaxX = -Infinity;
-    let rMinZ = Infinity, rMaxZ = -Infinity;
-    for (const [dx, dz] of corners) {
-      const rx = dx * cos - dz * sin + cx;
-      const rz = dx * sin + dz * cos + cz;
-      rMinX = Math.min(rMinX, rx);
-      rMaxX = Math.max(rMaxX, rx);
-      rMinZ = Math.min(rMinZ, rz);
-      rMaxZ = Math.max(rMaxZ, rz);
-    }
-    return {
-      minX: x + Math.round(rMinX),
-      maxX: x + Math.round(rMaxX),
-      minY: topY,
-      maxY: topY + bo.height,
-      minZ: z + Math.round(rMinZ),
-      maxZ: z + Math.round(rMaxZ),
-    };
-  });
-}
-
-// Does `topAABB` have stud support from the brick below (`bottomAABB`)?
-// Returns true if the top brick sits directly on the bottom brick's studs
-// (the part of the bottom brick's top face NOT covered by blockout zones).
-function hasStudSupport(
-  topAABB: AABB,
-  bottomAABB: AABB,
-  bottomBlockouts: AABB[],
-): boolean {
-  // Top brick must sit exactly on the bottom brick's top
-  if (topAABB.minY !== bottomAABB.maxY) return false;
-
-  // Compute XZ intersection of top brick and bottom brick footprint
-  const interMinX = Math.max(topAABB.minX, bottomAABB.minX);
-  const interMaxX = Math.min(topAABB.maxX, bottomAABB.maxX);
-  const interMinZ = Math.max(topAABB.minZ, bottomAABB.minZ);
-  const interMaxZ = Math.min(topAABB.maxZ, bottomAABB.maxZ);
-  if (interMinX >= interMaxX || interMinZ >= interMaxZ) return false;
-
-  // Check if the XZ intersection is entirely within any single blockout zone.
-  // If so, there are no studs in the overlap → no support.
-  for (const bo of bottomBlockouts) {
-    if (interMinX >= bo.minX && interMaxX <= bo.maxX &&
-        interMinZ >= bo.minZ && interMaxZ <= bo.maxZ) {
-      return false;
-    }
-  }
-  // Intersection extends beyond blockout zones → studs exist → supported
-  return true;
-}
-
-// Check if two bricks' physical footprints overlap (L-shape aware).
-function physicalOverlap(a: BrickInstance, aType: BrickDefinition, b: BrickInstance, bType: BrickDefinition): boolean {
-  const aFoot = getPhysicalFootprint(a, aType);
-  const bFoot = getPhysicalFootprint(b, bType);
-  for (const af of aFoot) {
-    for (const bf of bFoot) {
-      if (aabbOverlap(af, bf)) return true;
-    }
-  }
-  return false;
 }
 
 function checkCollision(
@@ -193,30 +93,13 @@ function checkCollision(
   excludeId?: string,
 ): boolean {
   const newAABB = getBrickAABB(newBrick, newType);
-  const newBlockouts = getBlockoutAABBs(newBrick, newType);
   for (const existing of bricks) {
     if (excludeId && existing.id === excludeId) continue;
     const existType = findBrickType(existing.typeId);
     if (!existType) continue;
     const existAABB = getBrickAABB(existing, existType);
-    // Use physical footprint overlap (L-shape aware) instead of AABB
-    if (physicalOverlap(newBrick, newType, existing, existType)) {
+    if (aabbOverlap(newAABB, existAABB)) {
       return true;
-    }
-    // New brick sits in an existing brick's block-out zone
-    const existBlockouts = getBlockoutAABBs(existing, existType);
-    for (const bo of existBlockouts) {
-      if (aabbOverlap(newAABB, bo)) {
-        // Allow if new brick also connects to studs on the same brick
-        if (!hasStudSupport(newAABB, existAABB, existBlockouts)) return true;
-      }
-    }
-    // New brick's block-out zone covers an existing brick
-    for (const bo of newBlockouts) {
-      if (aabbOverlap(bo, existAABB)) {
-        // Allow if existing brick connects to studs on the new brick
-        if (!hasStudSupport(existAABB, newAABB, newBlockouts)) return true;
-      }
     }
   }
   return false;
@@ -240,35 +123,24 @@ function checkBounds(brick: BrickInstance, brickType: BrickDefinition): string |
   return null;
 }
 
-// Verify a brick is supported — either on the baseplate (Y=0) or resting on
-// another brick's top face with physical footprint overlap (no floating bricks).
-// Uses L-shape footprint for corner pieces instead of full AABB.
 function checkSupport(bricks: BrickInstance[], brick: BrickInstance, brickType: BrickDefinition): boolean {
   const aabb = getBrickAABB(brick, brickType);
-  if (aabb.minY === 0) return true; // On baseplate
+  if (aabb.minY === 0) return true;
 
-  const newFootprint = getPhysicalFootprint(brick, brickType);
   for (const existing of bricks) {
     const et = findBrickType(existing.typeId);
     if (!et) continue;
     const ea = getBrickAABB(existing, et);
-    if (ea.maxY !== aabb.minY) continue; // Must be directly below
-    // Check physical footprints overlap (not just AABBs)
-    const existFootprint = getPhysicalFootprint(existing, et);
-    for (const nf of newFootprint) {
-      for (const ef of existFootprint) {
-        if (nf.minX < ef.maxX && nf.maxX > ef.minX &&
-            nf.minZ < ef.maxZ && nf.maxZ > ef.minZ) {
-          return true;
-        }
-      }
+    if (ea.maxY !== aabb.minY) continue;
+    // XZ overlap = support
+    if (aabb.minX < ea.maxX && aabb.maxX > ea.minX &&
+        aabb.minZ < ea.maxZ && aabb.maxZ > ea.minZ) {
+      return true;
     }
   }
   return false;
 }
 
-// Find all bricks that would lose support if the scene were mutated.
-// Pass the proposed brick list (after the mutation) and it returns IDs of unsupported bricks.
 function findUnsupported(bricks: BrickInstance[]): string[] {
   const unsupported: string[] = [];
   for (const brick of bricks) {
@@ -289,7 +161,7 @@ function generateId(): string {
 
 const resourceUri = "ui://brick-builder/mcp-app.html";
 
-// ── Brick catalog cheat sheet (returned by brick_read_me) ───────────────────
+// ── Brick cheat sheet (returned by brick_read_me) ───────────────────────────
 
 function buildCatalogCheatSheet(): string {
   let sheet = `# Brick Builder Reference
@@ -298,7 +170,7 @@ You only need to call brick_read_me once. Do NOT call it again — you will not 
 
 ## Order of Operations (MANDATORY — follow exactly)
 1. brick_read_me → Call once to learn the building format and rules (you just did this)
-2. brick_get_available → Call to see all available brick types and their dimensions
+2. brick_get_available → Call to see popular brick types and their dimensions
 3. brick_render_scene → Call BEFORE placing any bricks. This opens the 3D viewer for the user. If you skip this step, the user cannot see anything you build.
 4. brick_place → Now you can place bricks. Each brick appears live in the viewer as it's placed.
 5. brick_get_scene → Call anytime to inspect what's currently built
@@ -306,6 +178,9 @@ You only need to call brick_read_me once. Do NOT call it again — you will not 
 7. brick_clear_scene → Call to remove all bricks and start over
 
 CRITICAL: You must call brick_render_scene before your first brick_place call. Placing bricks without rendering the scene first means the user has no viewer open and sees nothing.
+
+## Brick Types
+Any LDraw part number works as a typeId. Call brick_get_available to see popular parts with their dimensions. You can also use any valid LDraw part number (e.g. "2454", "4460", "6141") — the server auto-detects dimensions from the LDraw library.
 
 ## Coordinate System
 - Baseplate: ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs on the X and Z axes
@@ -399,7 +274,7 @@ Use footprint.maxX from each response for the next brick's x:
 
 ## Rules
 - Build BOTTOM-UP: y=0 first, then y=3, y=6, etc. Floating bricks are rejected.
-- Use typeId values from brick_get_available for curated parts. You can also use any LDraw part number (e.g. "2454", "3039") — the server will auto-detect dimensions from the LDraw library.
+- Use typeId values from brick_get_available for popular parts. You can also use any LDraw part number — the server will auto-detect dimensions from the LDraw library.
 - Each brick_place returns success with the brick ID, or an error explaining why it failed. Read the error and adjust.
 - Rotation swaps dimensions — account for this when tiling.
 - ALL bricks must fit within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. The brick's full footprint (position + studs size) must not exceed x=${BASEPLATE_SIZE - 1} or z=${BASEPLATE_SIZE - 1}. Out-of-bounds placements are rejected.
@@ -441,13 +316,13 @@ export function createServer(): McpServer {
     name: "Brick Builder",
     version: "1.0.0",
   }, {
-    instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Brick type IDs are LDraw part numbers (e.g. "3001" = Brick 2x4). Call brick_get_available to see the curated catalog, but you can also use any valid LDraw part number — dimensions are auto-detected.`,
+    instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Brick type IDs are LDraw part numbers (e.g. "3001" = Brick 2x4). Call brick_get_available to see popular parts, but you can also use any valid LDraw part number — dimensions are auto-detected.`,
   });
 
   function collectDynamicTypes(): Record<string, BrickDefinition> | undefined {
     const dynamic: Record<string, BrickDefinition> = {};
     for (const brick of scene.bricks) {
-      if (!getBrickType(brick.typeId)) {
+      if (!dynamic[brick.typeId]) {
         const def = findBrickType(brick.typeId);
         if (def) dynamic[brick.typeId] = def;
       }
@@ -491,23 +366,26 @@ export function createServer(): McpServer {
   server.registerTool(
     "brick_get_available",
     {
-      description: "Returns all available brick types with their IDs, dimensions, and categories. Call this to learn what bricks you can use before building.",
+      description: "Returns popular brick types with their IDs and dimensions. You can also use any LDraw part number not listed here. Call this to learn what bricks you can use before building.",
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const byCategory: Record<string, { typeId: string; name: string; studsX: number; studsZ: number; heightUnits: number }[]> = {};
-      for (const bt of BRICK_CATALOG) {
-        (byCategory[bt.category] ??= []).push({
-          typeId: bt.id,
-          name: bt.name,
-          studsX: bt.studsX,
-          studsZ: bt.studsZ,
-          heightUnits: bt.heightUnits,
-        });
+      const parts: { typeId: string; name: string; studsX: number; studsZ: number; heightUnits: number }[] = [];
+      for (const partId of POPULAR_PART_IDS) {
+        const def = parseLDrawPart(partId);
+        if (def) {
+          parts.push({
+            typeId: def.id,
+            name: def.name,
+            studsX: def.studsX,
+            studsZ: def.studsZ,
+            heightUnits: def.heightUnits,
+          });
+        }
       }
       const result = {
-        catalog: byCategory,
-        note: "typeId values are LDraw part numbers (e.g. '3001' = Brick 2x4). Use exact typeId values in brick_place. Rotation swaps X and Z dimensions (e.g. 3001 at rotation 90 occupies X=4, Z=2).",
+        parts,
+        note: "typeId values are LDraw part numbers (e.g. '3001' = Brick 2x4). Use exact typeId values in brick_place. Rotation swaps X and Z dimensions (e.g. 3001 at rotation 90 occupies X=4, Z=2). You can also use any valid LDraw part number not listed here — dimensions are auto-detected.",
       };
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     },
@@ -534,7 +412,7 @@ export function createServer(): McpServer {
     {
       description: "Place a single brick. Returns the placed brick with its ID, or an error explaining why placement failed. Call brick_render_scene first to open the viewer.",
       inputSchema: {
-        typeId: z.string().describe("Brick type ID from brick_get_available"),
+        typeId: z.string().describe("Brick type ID from brick_get_available or any LDraw part number"),
         x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
         y: z.number().int().min(0).describe("Y position in plate-height units (0 = baseplate, +3 per standard brick layer)"),
         z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
@@ -546,7 +424,7 @@ export function createServer(): McpServer {
       const brickType = findBrickType(typeId);
       if (!brickType) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Call brick_get_available to see valid type IDs.` }) }],
+          content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Call brick_get_available to see valid type IDs, or use any valid LDraw part number.` }) }],
           isError: true,
         };
       }
@@ -741,7 +619,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 8: brick_add (app-only) ────────────────────────────────────────
+  // ── Tool 9: brick_add (app-only) ────────────────────────────────────────
 
   registerAppTool(
     server,
@@ -750,7 +628,7 @@ export function createServer(): McpServer {
       title: "Add Brick",
       description: `Add a single brick to the scene. The baseplate is ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs. Valid coordinates: x 0–${BASEPLATE_SIZE - 1}, z 0–${BASEPLATE_SIZE - 1}.`,
       inputSchema: {
-        typeId: z.string().describe("Brick type ID"),
+        typeId: z.string().describe("Brick type ID (LDraw part number)"),
         x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
         y: z.number().int().min(0).describe("Y position (plate-height units)"),
         z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
@@ -762,7 +640,7 @@ export function createServer(): McpServer {
     async ({ typeId, x, y, z, rotation, color }) => {
       const brickType = findBrickType(typeId);
       if (!brickType) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Call brick_read_me to see valid type IDs.` }) }], isError: true };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Use a valid LDraw part number.` }) }], isError: true };
       }
       const instance: BrickInstance = {
         id: generateId(),
@@ -786,7 +664,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 9: brick_remove (app-only) ─────────────────────────────────────
+  // ── Tool 10: brick_remove (app-only) ─────────────────────────────────────
 
   registerAppTool(
     server,
@@ -825,7 +703,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 10: brick_move (app-only) ───────────────────────────────────────
+  // ── Tool 11: brick_move (app-only) ───────────────────────────────────────
 
   registerAppTool(
     server,
@@ -882,7 +760,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 11: brick_rotate (app-only) ────────────────────────────────────
+  // ── Tool 12: brick_rotate (app-only) ────────────────────────────────────
 
   registerAppTool(
     server,
@@ -937,7 +815,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 12: brick_paint (app-only) ─────────────────────────────────────
+  // ── Tool 13: brick_paint (app-only) ─────────────────────────────────────
 
   registerAppTool(
     server,
@@ -961,7 +839,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 13: brick_set_camera (app-only) ────────────────────────────────
+  // ── Tool 14: brick_set_camera (app-only) ────────────────────────────────
 
   registerAppTool(
     server,
@@ -992,7 +870,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 14: brick_import_scene (app-only) ──────────────────────────────
+  // ── Tool 15: brick_import_scene (app-only) ──────────────────────────────
 
   registerAppTool(
     server,
@@ -1034,7 +912,7 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 15: brick_set_scene_name (app-only) ────────────────────────────
+  // ── Tool 16: brick_set_scene_name (app-only) ────────────────────────────
 
   registerAppTool(
     server,
@@ -1050,24 +928,6 @@ export function createServer(): McpServer {
     async ({ name }) => {
       scene.name = name;
       return sceneResult(`Scene renamed to '${name}'`);
-    },
-  );
-
-  // ── Tool 16: brick_get_catalog (app-only) ───────────────────────────────
-
-  registerAppTool(
-    server,
-    "brick_get_catalog",
-    {
-      title: "Get Brick Catalog",
-      description: "Returns the available brick types for the UI.",
-      inputSchema: {},
-      _meta: { ui: { visibility: ["app"] } },
-    },
-    async () => {
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify({ catalog: BRICK_CATALOG }) }],
-      };
     },
   );
 

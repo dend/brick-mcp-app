@@ -3,7 +3,6 @@ import type { App } from '@modelcontextprotocol/ext-apps';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { InteractionMode, SceneData, CameraState, BrickType } from '../types';
 import { DEFAULT_COLORS, INTERACTION_MODES } from '../constants';
-import { BRICK_CATALOG } from '../engine/BrickCatalog';
 import { useSceneManager } from '../hooks/useSceneManager';
 import { useInteraction } from '../hooks/useInteraction';
 import ThreeCanvas from './ThreeCanvas';
@@ -11,6 +10,15 @@ import Toolbar from './Toolbar';
 import BrickSelector from './BrickSelector';
 import ColorPicker from './ColorPicker';
 import SceneInfo from './SceneInfo';
+
+// Default brick type used before any scene data arrives
+const DEFAULT_BRICK_TYPE: BrickType = {
+  id: '3001',
+  name: 'Brick 2x4',
+  studsX: 2,
+  studsZ: 4,
+  heightUnits: 3,
+};
 
 interface BrickBuilderProps {
   app: App | null;
@@ -22,12 +30,17 @@ interface BrickBuilderProps {
 export default function BrickBuilder({ app, sceneData, cameraState, onToolResult }: BrickBuilderProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [mode, setMode] = useState<InteractionMode>('place');
-  const [selectedBrickType, setSelectedBrickType] = useState<BrickType>(BRICK_CATALOG[8]); // 2x4 brick
+  const [selectedBrickType, setSelectedBrickType] = useState<BrickType>(DEFAULT_BRICK_TYPE);
   const [selectedColor, setSelectedColor] = useState(DEFAULT_COLORS[0].hex);
   const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
   const [selectedBrickId, setSelectedBrickId] = useState<string | null>(null);
 
   const handle = useSceneManager(containerRef, sceneData, cameraState);
+
+  // Build catalog from dynamic types in scene data
+  const catalog = sceneData?.dynamicTypes
+    ? Object.values(sceneData.dynamicTypes)
+    : [];
 
   // Keyboard shortcut for mode switching
   const handleModeChange = useCallback((newMode: InteractionMode) => {
@@ -47,9 +60,6 @@ export default function BrickBuilder({ app, sceneData, cameraState, onToolResult
     },
     [handle],
   );
-
-  // Keyboard shortcut: 1-6 for modes
-  // This is handled inside useInteraction
 
   useInteraction({
     app,
@@ -88,7 +98,7 @@ export default function BrickBuilder({ app, sceneData, cameraState, onToolResult
       <ThreeCanvas ref={containerRef} />
       <Toolbar mode={mode} onModeChange={handleModeChange} />
       <BrickSelector
-        catalog={BRICK_CATALOG}
+        catalog={catalog}
         selectedType={selectedBrickType}
         onSelect={setSelectedBrickType}
         visible={mode === 'place'}

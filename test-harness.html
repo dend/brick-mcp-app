@@ -235,42 +235,9 @@ const PLATE_HEIGHT = 0.4;
 const BRICK_HEIGHT = 1.2;
 const BASEPLATE_SIZE = 48;
 
-// Brick categories
-const CAT = { BRICK: 'brick', PLATE: 'plate', SLOPE: 'slope', TECHNIC: 'technic', CORNER: 'corner' };
-
-// Brick catalog using LDraw part numbers (mirrored from server catalog)
-const BRICK_CATALOG = {
-  '3005': { name: 'Brick 1x1',  category: CAT.BRICK,   studsX: 1, studsZ: 1, heightUnits: 3 },
-  '3004': { name: 'Brick 1x2',  category: CAT.BRICK,   studsX: 1, studsZ: 2, heightUnits: 3 },
-  '3622': { name: 'Brick 1x3',  category: CAT.BRICK,   studsX: 1, studsZ: 3, heightUnits: 3 },
-  '3010': { name: 'Brick 1x4',  category: CAT.BRICK,   studsX: 1, studsZ: 4, heightUnits: 3 },
-  '3009': { name: 'Brick 1x6',  category: CAT.BRICK,   studsX: 1, studsZ: 6, heightUnits: 3 },
-  '3008': { name: 'Brick 1x8',  category: CAT.BRICK,   studsX: 1, studsZ: 8, heightUnits: 3 },
-  '3003': { name: 'Brick 2x2',  category: CAT.BRICK,   studsX: 2, studsZ: 2, heightUnits: 3 },
-  '3002': { name: 'Brick 2x3',  category: CAT.BRICK,   studsX: 2, studsZ: 3, heightUnits: 3 },
-  '3001': { name: 'Brick 2x4',  category: CAT.BRICK,   studsX: 2, studsZ: 4, heightUnits: 3 },
-  '2456': { name: 'Brick 2x6',  category: CAT.BRICK,   studsX: 2, studsZ: 6, heightUnits: 3 },
-  '3007': { name: 'Brick 2x8',  category: CAT.BRICK,   studsX: 2, studsZ: 8, heightUnits: 3 },
-  '3024': { name: 'Plate 1x1',  category: CAT.PLATE,   studsX: 1, studsZ: 1, heightUnits: 1 },
-  '3023': { name: 'Plate 1x2',  category: CAT.PLATE,   studsX: 1, studsZ: 2, heightUnits: 1 },
-  '3710': { name: 'Plate 1x4',  category: CAT.PLATE,   studsX: 1, studsZ: 4, heightUnits: 1 },
-  '3022': { name: 'Plate 2x2',  category: CAT.PLATE,   studsX: 2, studsZ: 2, heightUnits: 1 },
-  '3020': { name: 'Plate 2x4',  category: CAT.PLATE,   studsX: 2, studsZ: 4, heightUnits: 1 },
-  '3795': { name: 'Plate 2x6',  category: CAT.PLATE,   studsX: 2, studsZ: 6, heightUnits: 1 },
-  '3031': { name: 'Plate 4x4',  category: CAT.PLATE,   studsX: 4, studsZ: 4, heightUnits: 1 },
-  '3958': { name: 'Plate 6x6',  category: CAT.PLATE,   studsX: 6, studsZ: 6, heightUnits: 1 },
-  '3036': { name: 'Plate 6x8',  category: CAT.PLATE,   studsX: 6, studsZ: 8, heightUnits: 1 },
-  '3035': { name: 'Plate 4x8',  category: CAT.PLATE,   studsX: 4, studsZ: 8, heightUnits: 1 },
-  '4477': { name: 'Plate 1x10', category: CAT.PLATE,   studsX: 1, studsZ: 10, heightUnits: 1 },
-  '3039': { name: 'Slope 45 2x2', category: CAT.SLOPE,   studsX: 2, studsZ: 2, heightUnits: 3 },
-  '3700': { name: 'Technic 1x2', category: CAT.TECHNIC, studsX: 1, studsZ: 2, heightUnits: 3 },
-  '3701': { name: 'Technic 1x4', category: CAT.TECHNIC, studsX: 1, studsZ: 4, heightUnits: 3 },
-  '3894': { name: 'Technic 1x6', category: CAT.TECHNIC, studsX: 1, studsZ: 6, heightUnits: 3 },
-  '3702': { name: 'Technic 1x8', category: CAT.TECHNIC, studsX: 1, studsZ: 8, heightUnits: 3 },
-  '3709': { name: 'Technic 2x4', category: CAT.TECHNIC, studsX: 2, studsZ: 4, heightUnits: 3 },
-  '2357': { name: 'Corner 2x2',  category: CAT.CORNER,  studsX: 2, studsZ: 2, heightUnits: 3 },
-  '2462': { name: 'Corner 3x3',  category: CAT.CORNER,  studsX: 3, studsZ: 3, heightUnits: 3 },
-};
+// ── Known types map (populated from server dynamicTypes + brick_get_available) ──
+// { typeId: { name, studsX, studsZ, heightUnits } }
+const knownTypes = {};
 
 // ── Three.js Scene Setup ─────────────────────────────────────────────────────
 
@@ -370,65 +337,39 @@ async function initLDraw() {
 
   // Always mark ready — parts can still load with default materials
   ldrawReady = true;
-
-  try {
-    const partIds = Object.keys(BRICK_CATALOG);
-    let loaded = 0, failed = 0;
-    for (const partId of partIds) {
-      try {
-        const group = await ldrawLoader.loadAsync(`/ldraw/parts/${partId}.dat`);
-        let meshCount = 0;
-        group.traverse(child => { if (child.isMesh) meshCount++; });
-        const container = new THREE.Group();
-        container.add(group);
-        container.scale.set(LDRAW_SCALE, -LDRAW_SCALE, LDRAW_SCALE);
-        container.rotation.y = -Math.PI / 2;
-        const toRemove = [];
-        container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
-        toRemove.forEach(obj => obj.parent?.remove(obj));
-        ldrawTemplates.set(partId, container);
-        loaded++;
-        if (loaded <= 3) log(`LDraw: ${partId} loaded (${meshCount} meshes)`, 'dim');
-      } catch (e) {
-        failed++;
-        log(`LDraw: FAILED ${partId}: ${e.message}`, 'error');
-        console.warn(`LDraw: Could not load part ${partId}`, e);
-      }
-    }
-    log(`LDraw: ${loaded}/${partIds.length} catalog parts loaded, ${failed} failed`, loaded > 0 ? 'info' : 'error');
-    console.log(`LDraw loaded ${ldrawTemplates.size} part templates`);
-    // Re-render all bricks with LDraw geometry
-    if (currentBricks.length > 0) {
-      for (const [id, mesh] of brickMeshMap) {
-        brickGroup.remove(mesh);
-        if (mesh.geometry) mesh.geometry.dispose();
-        if (mesh.material) mesh.material.dispose();
-        mesh.traverse?.(child => {
-          if (child.material) {
-            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-            else child.material.dispose();
-          }
-        });
-      }
-      brickMeshMap.clear();
-      reconcileScene(currentBricks);
-    }
-  } catch (e) {
-    log(`LDraw: init error: ${e.message}`, 'error');
-    console.warn('LDraw initialization error', e);
-  }
 }
 initLDraw();
 
+// Load an LDraw part template on demand
+async function ensureLDrawTemplate(partId) {
+  if (ldrawTemplates.has(partId)) return ldrawTemplates.get(partId);
+  if (!ldrawReady) return null;
+  try {
+    const group = await ldrawLoader.loadAsync(`/ldraw/parts/${partId}.dat`);
+    const container = new THREE.Group();
+    container.add(group);
+    container.scale.set(LDRAW_SCALE, -LDRAW_SCALE, LDRAW_SCALE);
+    container.rotation.y = -Math.PI / 2;
+    const toRemove = [];
+    container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
+    toRemove.forEach(obj => obj.parent?.remove(obj));
+    ldrawTemplates.set(partId, container);
+    return container;
+  } catch (e) {
+    console.warn(`LDraw: Could not load part ${partId}`, e);
+    return null;
+  }
+}
+
 function createLDrawBrickMesh(brick) {
-  const catalog = BRICK_CATALOG[brick.typeId];
-  if (!catalog) return null;
+  const cat = knownTypes[brick.typeId];
+  if (!cat) return null;
   const template = ldrawTemplates.get(brick.typeId);
   if (!template) return null;
 
   const clone = template.clone();
-  const h = catalog.heightUnits * PLATE_HEIGHT;
-  clone.position.set(catalog.studsX * 0.5, h, catalog.studsZ * 0.5);
+  const h = cat.heightUnits * PLATE_HEIGHT;
+  clone.position.set(cat.studsX * 0.5, h, cat.studsZ * 0.5);
 
   const color = new THREE.Color(brick.color);
   const edgeColor = color.clone().multiplyScalar(0.5);
@@ -451,8 +392,8 @@ function createLDrawBrickMesh(brick) {
 
   // Position
   const pos = brick.position;
-  const w = catalog.studsX * STUD_SIZE;
-  const d = catalog.studsZ * STUD_SIZE;
+  const w = cat.studsX * STUD_SIZE;
+  const d = cat.studsZ * STUD_SIZE;
   const rot = brick.rotation || 0;
   const rotRad = -(rot * Math.PI) / 180;
   const cos = Math.cos(rotRad);
@@ -472,270 +413,75 @@ function createLDrawBrickMesh(brick) {
 function createBrickMesh(brick) {
   // Try LDraw first
   if (ldrawReady && ldrawTemplates.has(brick.typeId)) {
-    console.log(`createBrickMesh: using LDraw for ${brick.typeId}`);
     return createLDrawBrickMesh(brick);
   }
-  console.log(`createBrickMesh: procedural fallback for ${brick.typeId} (ldrawReady=${ldrawReady}, hasTemplate=${ldrawTemplates.has(brick.typeId)})`);
-  // Procedural fallback
-  const catalog = BRICK_CATALOG[brick.typeId];
-  if (!catalog) return null;
+  // Procedural fallback — generic box + studs
+  const cat = knownTypes[brick.typeId];
+  if (!cat) return null;
 
-  let studsX = catalog.studsX;
-  let studsZ = catalog.studsZ;
-  const heightUnits = catalog.heightUnits;
-
-  // Apply rotation swap (skip for slope/corner — they use geometry rotation instead)
+  let studsX = cat.studsX;
+  let studsZ = cat.studsZ;
+  const heightUnits = cat.heightUnits;
   const rot = brick.rotation || 0;
-  const cat = catalog.category;
-  if (cat !== CAT.SLOPE && cat !== CAT.CORNER && (rot === 90 || rot === 270)) {
-    [studsX, studsZ] = [studsZ, studsX];
-  }
+  if (rot === 90 || rot === 270) [studsX, studsZ] = [studsZ, studsX];
 
   const w = studsX * STUD_SIZE;
   const h = heightUnits * PLATE_HEIGHT;
   const d = studsZ * STUD_SIZE;
 
-  // Real-brick proportions (from MachineBlocks OpenSCAD reference)
-  // Wall: 1.2mm / 8mm grid = 0.15 stud units
-  // Stud inner hole: 3.2mm dia → 0.2 radius in stud units
-  // Underside tube outer: 6.51mm dia → 0.407 radius
-  // Underside tube inner: 4.8mm dia → 0.3 radius (= stud outer)
   const WALL = 0.15;
   const STUD_IR = 0.2;
-  const TUBE_OR = 0.407;
-  const TUBE_IR = STUD_DIAMETER / 2;
   const CURVE_SEG = 16;
 
   const parts = [];
 
-  // Helper: create a rectangular wall shape with circular pin holes
-  function technicWallShape(wallWidth, holePositions, wallBot, wallTop, holeY, pinR) {
-    const shape = new THREE.Shape();
-    shape.moveTo(-wallWidth / 2, wallBot);
-    shape.lineTo(wallWidth / 2, wallBot);
-    shape.lineTo(wallWidth / 2, wallTop);
-    shape.lineTo(-wallWidth / 2, wallTop);
-    shape.lineTo(-wallWidth / 2, wallBot);
-    for (const hp of holePositions) {
-      const hole = new THREE.Path();
-      hole.absarc(hp, holeY, pinR, 0, Math.PI * 2, true);
-      shape.holes.push(hole);
-    }
-    return shape;
-  }
+  // Top plate
+  const topPlate = new THREE.BoxGeometry(w, WALL, d);
+  topPlate.translate(0, h / 2 - WALL / 2, 0);
+  parts.push(topPlate);
 
-  if (cat === CAT.SLOPE) {
-    // 45° slope: flat top at back row (studs), slope face on front row
-    // Pentagon cross-section in shape space (shape_x → −world_z after rotateY(π/2)):
-    //   shape +x = back (world −Z), shape −x = front (world +Z)
-    //
-    //   back-top _________ mid-top (front edge of flat top)
-    //           |         \
-    //           |          \  45° slope face
-    //           |           \
-    //           |            \ front-slope-meet
-    //           |            |  short vertical front wall
-    //           |____________|
-    //   back-bottom    front-bottom
-    //
-    const slopeRun = d / 2;  // slope spans front half (1 stud depth)
-    const frontWallTop = h / 2 - slopeRun;  // 45° → drop = run
+  const wallH = h - WALL;
+  const wallY = -WALL / 2;
+  const innerD = d - WALL * 2;
 
-    const slopeShape = new THREE.Shape();
-    slopeShape.moveTo(-d / 2, -h / 2);              // front-bottom
-    slopeShape.lineTo( d / 2, -h / 2);               // back-bottom
-    slopeShape.lineTo( d / 2,  h / 2);               // back-top
-    slopeShape.lineTo( 0,      h / 2);               // mid-top (front edge of flat top)
-    slopeShape.lineTo(-d / 2,  frontWallTop);        // slope meets front wall
-    slopeShape.closePath();
+  // Walls
+  const fWall = new THREE.BoxGeometry(w, wallH, WALL);
+  fWall.translate(0, wallY, -d / 2 + WALL / 2);
+  parts.push(fWall);
+  const bkWall = new THREE.BoxGeometry(w, wallH, WALL);
+  bkWall.translate(0, wallY, d / 2 - WALL / 2);
+  parts.push(bkWall);
+  const lWall = new THREE.BoxGeometry(WALL, wallH, innerD);
+  lWall.translate(-w / 2 + WALL / 2, wallY, 0);
+  parts.push(lWall);
+  const rWall = new THREE.BoxGeometry(WALL, wallH, innerD);
+  rWall.translate(w / 2 - WALL / 2, wallY, 0);
+  parts.push(rWall);
 
-    const slopeGeo = new THREE.ExtrudeGeometry(slopeShape, {
-      depth: w, bevelEnabled: false,
-    });
-    // Extrude was along +Z; rotate so extrude axis aligns with world X (width)
-    slopeGeo.rotateY(Math.PI / 2);
-    slopeGeo.translate(-w / 2, 0, 0);
-    parts.push(slopeGeo);
-  } else if (cat === CAT.CORNER) {
-    // L-shaped body: 1-stud-wide arms, notch at +X,+Z before rotation
-    // Arm 1: full width, 1-stud front row
-    const arm1 = new THREE.BoxGeometry(w, h, STUD_SIZE);
-    arm1.translate(0, 0, -(d - STUD_SIZE) / 2);
-    parts.push(arm1);
-    // Arm 2: 1-stud wide left column, remaining depth
-    const arm2 = new THREE.BoxGeometry(STUD_SIZE, h, d - STUD_SIZE);
-    arm2.translate(-(w - STUD_SIZE) / 2, 0, STUD_SIZE / 2);
-    parts.push(arm2);
-  } else {
-    // ── Top plate (shared by regular + technic) ──
-    const topPlate = new THREE.BoxGeometry(w, WALL, d);
-    topPlate.translate(0, h / 2 - WALL / 2, 0);
-    parts.push(topPlate);
+  // Studs (hollow annular rings)
+  const studShape = new THREE.Shape();
+  studShape.absarc(0, 0, STUD_DIAMETER / 2, 0, Math.PI * 2, false);
+  const studHole = new THREE.Path();
+  studHole.absarc(0, 0, STUD_IR, 0, Math.PI * 2, true);
+  studShape.holes.push(studHole);
+  const baseStudGeo = new THREE.ExtrudeGeometry(studShape, {
+    depth: STUD_HEIGHT, bevelEnabled: false, curveSegments: CURVE_SEG,
+  });
+  baseStudGeo.rotateX(-Math.PI / 2);
 
-    const wallH = h - WALL;
-    const wallY = -WALL / 2;
-    const wallBot = -h / 2;
-    const wallTop = h / 2 - WALL;
-    const innerD = d - WALL * 2;
-
-    // ── Walls ──
-    if (cat === CAT.TECHNIC) {
-      const PIN_R = 0.3; // pin hole radius (4.8mm diameter)
-      const holeCenterY = 0; // holes centered on brick body
-      const extSettings = { depth: WALL, bevelEnabled: false, curveSegments: CURVE_SEG };
-
-      // Front/back walls — holes centered between stud rows along X
-      const fbHoleCount = studsX - 1;
-      if (fbHoleCount > 0) {
-        const fbHoles = [];
-        for (let i = 0; i < fbHoleCount; i++) {
-          fbHoles.push((i - studsX / 2 + 1) * STUD_SIZE);
-        }
-        const fbShape = technicWallShape(w, fbHoles, wallBot, wallTop, holeCenterY, PIN_R);
-
-        const frontGeo = new THREE.ExtrudeGeometry(fbShape, extSettings);
-        frontGeo.translate(0, 0, -d / 2);
-        parts.push(frontGeo);
-
-        const backGeo = new THREE.ExtrudeGeometry(fbShape, extSettings);
-        backGeo.translate(0, 0, d / 2 - WALL);
-        parts.push(backGeo);
-      } else {
-        // 1-wide: no holes on short faces
-        const fWall = new THREE.BoxGeometry(w, wallH, WALL);
-        fWall.translate(0, wallY, -d / 2 + WALL / 2);
-        parts.push(fWall);
-        const bkWall = new THREE.BoxGeometry(w, wallH, WALL);
-        bkWall.translate(0, wallY, d / 2 - WALL / 2);
-        parts.push(bkWall);
-      }
-
-      // Left/right walls — holes centered between stud columns along Z
-      const lrHoleCount = studsZ - 1;
-      if (lrHoleCount > 0) {
-        const lrHoles = [];
-        for (let i = 0; i < lrHoleCount; i++) {
-          lrHoles.push((i - studsZ / 2 + 1) * STUD_SIZE);
-        }
-        const lrShape = technicWallShape(innerD, lrHoles, wallBot, wallTop, holeCenterY, PIN_R);
-
-        const leftGeo = new THREE.ExtrudeGeometry(lrShape, extSettings);
-        leftGeo.rotateY(Math.PI / 2);
-        leftGeo.translate(-w / 2, 0, 0);
-        parts.push(leftGeo);
-
-        const rightGeo = new THREE.ExtrudeGeometry(lrShape, extSettings);
-        rightGeo.rotateY(Math.PI / 2);
-        rightGeo.translate(w / 2 - WALL, 0, 0);
-        parts.push(rightGeo);
-      } else {
-        const lWall = new THREE.BoxGeometry(WALL, wallH, innerD);
-        lWall.translate(-w / 2 + WALL / 2, wallY, 0);
-        parts.push(lWall);
-        const rWall = new THREE.BoxGeometry(WALL, wallH, innerD);
-        rWall.translate(w / 2 - WALL / 2, wallY, 0);
-        parts.push(rWall);
-      }
-    } else {
-      // ── Regular solid walls ──
-      const fWall = new THREE.BoxGeometry(w, wallH, WALL);
-      fWall.translate(0, wallY, -d / 2 + WALL / 2);
-      parts.push(fWall);
-
-      const bkWall = new THREE.BoxGeometry(w, wallH, WALL);
-      bkWall.translate(0, wallY, d / 2 - WALL / 2);
-      parts.push(bkWall);
-
-      const lWall = new THREE.BoxGeometry(WALL, wallH, innerD);
-      lWall.translate(-w / 2 + WALL / 2, wallY, 0);
-      parts.push(lWall);
-
-      const rWall = new THREE.BoxGeometry(WALL, wallH, innerD);
-      rWall.translate(w / 2 - WALL / 2, wallY, 0);
-      parts.push(rWall);
-    }
-
-    // ── Underside tubes (for 2+ wide bricks) ──
-    if (studsX >= 2 && studsZ >= 2) {
-      const tubeShape = new THREE.Shape();
-      tubeShape.absarc(0, 0, TUBE_OR, 0, Math.PI * 2, false);
-      const tubeHole = new THREE.Path();
-      tubeHole.absarc(0, 0, TUBE_IR, 0, Math.PI * 2, true);
-      tubeShape.holes.push(tubeHole);
-
-      const baseTubeGeo = new THREE.ExtrudeGeometry(tubeShape, {
-        depth: wallH, bevelEnabled: false, curveSegments: CURVE_SEG,
-      });
-      baseTubeGeo.rotateX(-Math.PI / 2);
-
-      for (let tx = 0; tx < studsX - 1; tx++) {
-        for (let tz = 0; tz < studsZ - 1; tz++) {
-          const tube = baseTubeGeo.clone();
-          tube.translate(
-            (tx - studsX / 2 + 1) * STUD_SIZE,
-            -h / 2,
-            (tz - studsZ / 2 + 1) * STUD_SIZE,
-          );
-          parts.push(tube);
-        }
-      }
-    } else if ((studsX === 1 && studsZ >= 2) || (studsZ === 1 && studsX >= 2)) {
-      // Ribs for 1-wide bricks
-      const ribT = 0.1;
-      if (studsX === 1) {
-        for (let tz = 0; tz < studsZ - 1; tz++) {
-          const rib = new THREE.BoxGeometry(w - WALL * 2, wallH, ribT);
-          rib.translate(0, wallY, (tz - studsZ / 2 + 1) * STUD_SIZE);
-          parts.push(rib);
-        }
-      } else {
-        for (let tx = 0; tx < studsX - 1; tx++) {
-          const rib = new THREE.BoxGeometry(ribT, wallH, d - WALL * 2);
-          rib.translate((tx - studsX / 2 + 1) * STUD_SIZE, wallY, 0);
-          parts.push(rib);
-        }
-      }
+  for (let sx = 0; sx < studsX; sx++) {
+    for (let sz = 0; sz < studsZ; sz++) {
+      const stud = baseStudGeo.clone();
+      stud.translate(
+        (sx - studsX / 2 + 0.5) * STUD_SIZE,
+        h / 2,
+        (sz - studsZ / 2 + 0.5) * STUD_SIZE,
+      );
+      parts.push(stud);
     }
   }
 
-  // ── Studs (hollow annular rings) ──
-  {
-    const studShape = new THREE.Shape();
-    studShape.absarc(0, 0, STUD_DIAMETER / 2, 0, Math.PI * 2, false);
-    const studHole = new THREE.Path();
-    studHole.absarc(0, 0, STUD_IR, 0, Math.PI * 2, true);
-    studShape.holes.push(studHole);
-
-    const baseStudGeo = new THREE.ExtrudeGeometry(studShape, {
-      depth: STUD_HEIGHT, bevelEnabled: false, curveSegments: CURVE_SEG,
-    });
-    baseStudGeo.rotateX(-Math.PI / 2);
-
-    for (let sx = 0; sx < studsX; sx++) {
-      for (let sz = 0; sz < studsZ; sz++) {
-        // Skip notch region for L-shaped corner pieces (sx >= 1 && sz >= 1)
-        if (cat === CAT.CORNER && sx >= 1 && sz >= 1) continue;
-        // Slopes: studs only on the back row (sz === 0, the flat full-height side)
-        if (cat === CAT.SLOPE && sz !== 0) continue;
-        const stud = baseStudGeo.clone();
-        stud.translate(
-          (sx - studsX / 2 + 0.5) * STUD_SIZE,
-          h / 2,
-          (sz - studsZ / 2 + 0.5) * STUD_SIZE,
-        );
-        parts.push(stud);
-      }
-    }
-  }
-
-  // Normalize all parts to non-indexed so mergeGeometries can combine
-  // ExtrudeGeometry (hollow studs/tubes) with BoxGeometry (walls) reliably
   const merged = mergeGeometries(parts.map(g => g.toNonIndexed()));
-
-  // Corner + slope pieces need actual geometry rotation (pre-swap is a no-op for 2x2)
-  if ((cat === CAT.CORNER || cat === CAT.SLOPE) && rot !== 0) {
-    merged.rotateY(-rot * Math.PI / 180);
-  }
 
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(brick.color),
@@ -746,7 +492,6 @@ function createBrickMesh(brick) {
   mesh.castShadow = true;
   mesh.receiveShadow = true;
 
-  // Position: server coordinates are in stud units, Y is height-unit based
   const pos = brick.position;
   mesh.position.set(
     pos.x * STUD_SIZE + w / 2,
@@ -764,7 +509,6 @@ function reconcileScene(bricks) {
   for (const [id, obj] of brickMeshMap) {
     if (!incoming.has(id)) {
       brickGroup.remove(obj);
-      // Dispose materials (handle both Mesh and Group)
       obj.traverse?.(child => {
         if (child.material) {
           if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
@@ -779,7 +523,7 @@ function reconcileScene(bricks) {
 
   // Add/update bricks
   for (const brick of bricks) {
-    if (brickMeshMap.has(brick.id)) continue; // already rendered
+    if (brickMeshMap.has(brick.id)) continue;
     const mesh = createBrickMesh(brick);
     if (mesh) {
       brickGroup.add(mesh);
@@ -865,43 +609,34 @@ function registerDynamicTypes(dynamicTypes) {
   if (!dynamicTypes) return;
   let added = 0;
   for (const [typeId, def] of Object.entries(dynamicTypes)) {
-    if (!BRICK_CATALOG[typeId]) {
-      BRICK_CATALOG[typeId] = {
+    if (!knownTypes[typeId]) {
+      knownTypes[typeId] = {
         name: def.name,
-        category: def.category || 'generic',
         studsX: def.studsX,
         studsZ: def.studsZ,
         heightUnits: def.heightUnits,
       };
       added++;
       // Load LDraw template for the new type
-      if (!ldrawTemplates.has(typeId)) {
-        ldrawLoader.loadAsync(`/ldraw/parts/${typeId}.dat`).then(group => {
-          const container = new THREE.Group();
-          container.add(group);
-          container.scale.set(LDRAW_SCALE, -LDRAW_SCALE, LDRAW_SCALE);
-          container.rotation.y = -Math.PI / 2;
-          const toRemove = [];
-          container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
-          toRemove.forEach(obj => obj.parent?.remove(obj));
-          ldrawTemplates.set(typeId, container);
-          // Remove procedural meshes for this type so reconcile recreates them with LDraw
-          for (const brick of currentBricks) {
-            if (brick.typeId === typeId && brickMeshMap.has(brick.id)) {
-              const old = brickMeshMap.get(brick.id);
-              brickGroup.remove(old);
-              old.traverse?.(child => {
-                if (child.material) {
-                  if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
-                  else child.material.dispose();
-                }
-              });
-              brickMeshMap.delete(brick.id);
-            }
+      ensureLDrawTemplate(typeId).then(template => {
+        if (!template) return;
+        // Remove procedural meshes for this type so reconcile recreates them with LDraw
+        for (const brick of currentBricks) {
+          if (brick.typeId === typeId && brickMeshMap.has(brick.id)) {
+            const old = brickMeshMap.get(brick.id);
+            brickGroup.remove(old);
+            old.traverse?.(child => {
+              if (child.material) {
+                if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                else child.material.dispose();
+              }
+            });
+            brickMeshMap.delete(brick.id);
           }
-          if (currentBricks.length > 0) reconcileScene(currentBricks);
-        }).catch(e => console.warn(`LDraw: Could not load dynamic part ${typeId}`, e));
-      }
+        }
+        ghostKey = '';
+        if (currentBricks.length > 0) reconcileScene(currentBricks);
+      });
     }
   }
   if (added) {
@@ -956,7 +691,6 @@ async function refreshScene() {
 // ── Connection ───────────────────────────────────────────────────────────────
 
 window.initSession = async function() {
-  // Reset stale state from any previous (failed) connection attempt
   sessionId = null;
   requestId = 0;
 
@@ -982,27 +716,29 @@ window.initSession = async function() {
     document.getElementById('sessionInfo').textContent = sessionId?.slice(0, 8) + '...';
     log(`Connected: ${sessionId}`, 'pass');
 
-    // Sync brick catalog from server so newly added types appear automatically
+    // Sync known types from server via brick_get_available
     try {
       const catResp = await callTool('brick_get_available');
       const catPayload = parseToolPayload(catResp.body);
-      if (catPayload?.catalog) {
+      if (catPayload?.parts) {
         let added = 0;
-        for (const [category, types] of Object.entries(catPayload.catalog)) {
-          for (const t of types) {
-            if (!BRICK_CATALOG[t.typeId]) {
-              BRICK_CATALOG[t.typeId] = { category, studsX: t.studsX, studsZ: t.studsZ, heightUnits: t.heightUnits };
-              added++;
-            }
+        for (const t of catPayload.parts) {
+          if (!knownTypes[t.typeId]) {
+            knownTypes[t.typeId] = { name: t.name, studsX: t.studsX, studsZ: t.studsZ, heightUnits: t.heightUnits };
+            added++;
           }
         }
         if (added) {
           rebuildTypeDropdown();
-          log(`Synced catalog: ${added} new type(s) from server`, 'info');
+          log(`Synced ${added} part type(s) from server`, 'info');
+        }
+        // Start loading LDraw templates for all known types
+        for (const typeId of Object.keys(knownTypes)) {
+          ensureLDrawTemplate(typeId);
         }
       }
     } catch (e) {
-      log(`Catalog sync failed: ${e.message}`, 'warn');
+      log(`Part sync failed: ${e.message}`, 'warn');
     }
 
     await refreshScene();
@@ -1033,24 +769,20 @@ window.quickBuild = async function() {
   log('Building perimeter wall...', 'info');
   const bricks = [];
   const colors = ['#cc0000', '#0055bf', '#ffd700', '#00852b'];
-  const BP = 48; // baseplate size in studs
-  const brickLen = 4; // 3001 (Brick 2x4) is 2 wide x 4 long
+  const BP = 48;
+  const brickLen = 4;
   const brickW = 2;
   let ci = 0;
 
-  // Front wall (Z=0, bricks along X)
   for (let x = 0; x < BP; x += brickLen) {
     bricks.push({ typeId: '3001', x, y: 0, z: 0, rotation: '0', color: colors[ci++ % 4] });
   }
-  // Back wall (Z=46, bricks along X)
   for (let x = 0; x < BP; x += brickLen) {
     bricks.push({ typeId: '3001', x, y: 0, z: BP - brickW, rotation: '0', color: colors[ci++ % 4] });
   }
-  // Left wall (X=0, bricks along Z, rotated 90)
   for (let z = brickW; z < BP - brickW; z += brickLen) {
     bricks.push({ typeId: '3001', x: 0, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
   }
-  // Right wall (X=46, bricks along Z, rotated 90)
   for (let z = brickW; z < BP - brickW; z += brickLen) {
     bricks.push({ typeId: '3001', x: BP - brickW, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
   }
@@ -1129,14 +861,11 @@ window.callManualTool = async function() {
 
 // ── Collision-aware add helper ────────────────────────────────────────────────
 
-// Tries to add a brick, retrying with a new random position on collision (up to maxRetries).
-// Fetches the scene to compute stacking Y before each attempt.
 async function addBrickSafe(typeId, color, maxRetries = 10) {
-  const def = BRICK_CATALOG[typeId];
+  const def = knownTypes[typeId];
   if (!def) throw new Error(`Unknown type: ${typeId}`);
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    // Get current scene for stacking calculation
     let bricks = [];
     try {
       const sr = await callTool('brick_get_scene');
@@ -1146,10 +875,9 @@ async function addBrickSafe(typeId, color, maxRetries = 10) {
     const x = Math.floor(Math.random() * (48 - def.studsX));
     const z = Math.floor(Math.random() * (48 - def.studsZ));
 
-    // Find highest Y at this position to stack on top
     let topY = 0;
     for (const b of bricks) {
-      const bd = BRICK_CATALOG[b.typeId];
+      const bd = knownTypes[b.typeId];
       if (!bd) continue;
       let bsx = bd.studsX, bsz = bd.studsZ;
       if (b.rotation === 90 || b.rotation === 270) [bsx, bsz] = [bsz, bsx];
@@ -1316,14 +1044,13 @@ const cursorOverlay = document.getElementById('cursorOverlay');
 
 // ── Populate placement UI ────────────────────────────────────────────────────
 
-// Brick type input with datalist suggestions
 const placeTypeInput = document.getElementById('placeType');
 const placeTypeDatalist = document.getElementById('placeTypeList');
 function rebuildTypeDropdown() {
   placeTypeDatalist.innerHTML = '';
-  for (const typeId of Object.keys(BRICK_CATALOG)) {
+  for (const typeId of Object.keys(knownTypes)) {
     const opt = document.createElement('option');
-    const entry = BRICK_CATALOG[typeId];
+    const entry = knownTypes[typeId];
     opt.value = typeId;
     opt.label = entry.name ? `${typeId} - ${entry.name}` : typeId;
     placeTypeDatalist.appendChild(opt);
@@ -1334,9 +1061,8 @@ placeTypeInput.value = placeTypeId;
 placeTypeInput.addEventListener('input', (e) => { placeTypeId = e.target.value.trim(); });
 placeTypeInput.addEventListener('change', (e) => { placeTypeId = e.target.value.trim(); });
 
-// Returns catalog entry for a type, or a 1x1x3 fallback for unknown types
 function getPlacementDef(typeId) {
-  return BRICK_CATALOG[typeId] || null;
+  return knownTypes[typeId] || null;
 }
 
 // Color palette
@@ -1354,39 +1080,16 @@ for (const c of DEFAULT_COLORS) {
   paletteEl.appendChild(swatch);
 }
 
-// ── Client-side collision detection (ported from CollisionDetector.ts) ───────
+// ── Client-side collision detection (simple AABB) ────────────────────────────
 
 function getBrickAABB(brick) {
   const { x, y, z } = brick.position;
-  const cat = BRICK_CATALOG[brick.typeId];
+  const cat = knownTypes[brick.typeId];
   if (!cat) return null;
   const isRotated = brick.rotation === 90 || brick.rotation === 270;
   const sx = isRotated ? cat.studsZ : cat.studsX;
   const sz = isRotated ? cat.studsX : cat.studsZ;
   return { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
-}
-
-// Return the physical footprint AABBs (L-shape arms for corners, full AABB otherwise).
-function getPhysicalFootprintHarness(typeId, x, y, z, rotation) {
-  const cat = BRICK_CATALOG[typeId];
-  if (!cat) return [];
-  const aabb = getBrickAABB({ typeId, position: { x, y, z }, rotation });
-  if (!aabb) return [];
-  if (cat.category !== CAT.CORNER) return [aabb];
-
-  const n = cat.studsX;
-  const rowAtZMax = rotation === 90 || rotation === 180;
-  const colAtXMax = rotation === 180 || rotation === 270;
-  const rowArm = {
-    minX: x, maxX: x + n, minY: aabb.minY, maxY: aabb.maxY,
-    minZ: rowAtZMax ? z + n - 1 : z, maxZ: rowAtZMax ? z + n : z + 1,
-  };
-  const colArm = {
-    minX: colAtXMax ? x + n - 1 : x, maxX: colAtXMax ? x + n : x + 1,
-    minY: aabb.minY, maxY: aabb.maxY,
-    minZ: rowAtZMax ? z : z + 1, maxZ: rowAtZMax ? z + n - 1 : z + n,
-  };
-  return [rowArm, colArm];
 }
 
 function aabbOverlap(a, b) {
@@ -1396,23 +1099,22 @@ function aabbOverlap(a, b) {
 }
 
 function checkCollisionClient(bricks, typeId, x, y, z, rotation) {
-  const cat = BRICK_CATALOG[typeId];
+  const cat = knownTypes[typeId];
   if (!cat) return true;
-  const candidateFootprint = getPhysicalFootprintHarness(typeId, x, y, z, rotation);
+  const isRotated = rotation === 90 || rotation === 270;
+  const sx = isRotated ? cat.studsZ : cat.studsX;
+  const sz = isRotated ? cat.studsX : cat.studsZ;
+  const candidateAABB = { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
   for (const existing of bricks) {
-    const existFootprint = getPhysicalFootprintHarness(
-      existing.typeId, existing.position.x, existing.position.y, existing.position.z, existing.rotation);
-    for (const cf of candidateFootprint) {
-      for (const ef of existFootprint) {
-        if (aabbOverlap(cf, ef)) return true;
-      }
-    }
+    const existAABB = getBrickAABB(existing);
+    if (!existAABB) continue;
+    if (aabbOverlap(candidateAABB, existAABB)) return true;
   }
   return false;
 }
 
 function isInBounds(typeId, x, z, rotation) {
-  const cat = BRICK_CATALOG[typeId];
+  const cat = knownTypes[typeId];
   if (!cat) return false;
   const isRotated = rotation === 90 || rotation === 270;
   const sx = isRotated ? cat.studsZ : cat.studsX;
@@ -1448,7 +1150,7 @@ function raycastPlacement(event) {
         }
       }
       if (hitBrick) {
-        const hitCat = BRICK_CATALOG[hitBrick.typeId];
+        const hitCat = knownTypes[hitBrick.typeId];
         if (hitCat) {
           gridX = Math.floor(hit.point.x / STUD_SIZE);
           gridY = hitBrick.position.y + hitCat.heightUnits;
@@ -1471,30 +1173,21 @@ function raycastPlacement(event) {
     }
   }
 
-  // Auto-elevate: if the new brick's physical footprint overlaps any existing brick's
-  // physical footprint, place on top of the highest overlapping brick.
-  // Uses L-shape footprint for corners so we don't elevate over notch areas.
-  // For unknown types, skip auto-elevation (server handles validation).
+  // Auto-elevate: find highest Y where AABB overlaps
   const placeCat = getPlacementDef(placeTypeId);
   if (placeCat) {
-    const newFootprint = getPhysicalFootprintHarness(placeTypeId, gridX, 0, gridZ, placeRotation);
+    const isRotated = placeRotation === 90 || placeRotation === 270;
+    const sx = isRotated ? placeCat.studsZ : placeCat.studsX;
+    const sz = isRotated ? placeCat.studsX : placeCat.studsZ;
     for (const existing of currentBricks) {
-      const et = BRICK_CATALOG[existing.typeId];
+      const et = knownTypes[existing.typeId];
       if (!et) continue;
-      const existFootprint = getPhysicalFootprintHarness(
-        existing.typeId, existing.position.x, existing.position.y, existing.position.z, existing.rotation);
-      let overlaps = false;
-      for (const nf of newFootprint) {
-        for (const ef of existFootprint) {
-          // Check XZ overlap only (ignore Y for elevation purposes)
-          if (nf.minX < ef.maxX && nf.maxX > ef.minX &&
-              nf.minZ < ef.maxZ && nf.maxZ > ef.minZ) {
-            overlaps = true; break;
-          }
-        }
-        if (overlaps) break;
-      }
-      if (overlaps) {
+      const eRot = existing.rotation === 90 || existing.rotation === 270;
+      const esx = eRot ? et.studsZ : et.studsX;
+      const esz = eRot ? et.studsX : et.studsZ;
+      // XZ overlap check
+      if (gridX < existing.position.x + esx && gridX + sx > existing.position.x &&
+          gridZ < existing.position.z + esz && gridZ + sz > existing.position.z) {
         const topY = existing.position.y + et.heightUnits;
         if (topY > gridY) gridY = topY;
       }
@@ -1507,7 +1200,7 @@ function raycastPlacement(event) {
 // ── Ghost preview ────────────────────────────────────────────────────────────
 
 function createGhostMesh(typeId, rotation) {
-  const cat = BRICK_CATALOG[typeId];
+  const cat = knownTypes[typeId];
   if (!cat) return null;
 
   // Try LDraw geometry for accurate ghost shape
@@ -1517,7 +1210,6 @@ function createGhostMesh(typeId, rotation) {
     const gh = cat.heightUnits * PLATE_HEIGHT;
     clone.position.set(cat.studsX * 0.5, gh, cat.studsZ * 0.5);
 
-    // Make all child materials transparent green
     const ghostMat = new THREE.MeshStandardMaterial({
       color: 0x00ff00, transparent: true, opacity: 0.45, depthWrite: false,
     });
@@ -1536,47 +1228,20 @@ function createGhostMesh(typeId, rotation) {
     return wrapper;
   }
 
-  // Procedural fallback for parts without LDraw templates
-  const catType = cat.category;
+  // Procedural fallback — generic box + studs
   let studsX = cat.studsX, studsZ = cat.studsZ;
-  if (catType !== CAT.CORNER && catType !== CAT.SLOPE && (rotation === 90 || rotation === 270)) [studsX, studsZ] = [studsZ, studsX];
+  if (rotation === 90 || rotation === 270) [studsX, studsZ] = [studsZ, studsX];
 
   const w = studsX * STUD_SIZE;
   const h = cat.heightUnits * PLATE_HEIGHT;
   const d = studsZ * STUD_SIZE;
 
   const parts = [];
-
-  if (catType === CAT.SLOPE) {
-    const slopeRun = d / 2;
-    const frontWallTop = h / 2 - slopeRun;
-    const slopeShape = new THREE.Shape();
-    slopeShape.moveTo(-d / 2, -h / 2);
-    slopeShape.lineTo( d / 2, -h / 2);
-    slopeShape.lineTo( d / 2,  h / 2);
-    slopeShape.lineTo( 0,      h / 2);
-    slopeShape.lineTo(-d / 2,  frontWallTop);
-    slopeShape.closePath();
-    const slopeGeo = new THREE.ExtrudeGeometry(slopeShape, { depth: w, bevelEnabled: false });
-    slopeGeo.rotateY(Math.PI / 2);
-    slopeGeo.translate(-w / 2, 0, 0);
-    parts.push(slopeGeo);
-  } else if (catType === CAT.CORNER) {
-    const arm1 = new THREE.BoxGeometry(w, h, STUD_SIZE);
-    arm1.translate(0, 0, -(d - STUD_SIZE) / 2);
-    parts.push(arm1);
-    const arm2 = new THREE.BoxGeometry(STUD_SIZE, h, d - STUD_SIZE);
-    arm2.translate(-(w - STUD_SIZE) / 2, 0, STUD_SIZE / 2);
-    parts.push(arm2);
-  } else {
-    parts.push(new THREE.BoxGeometry(w, h, d));
-  }
+  parts.push(new THREE.BoxGeometry(w, h, d));
 
   const studGeo = new THREE.CylinderGeometry(STUD_DIAMETER / 2, STUD_DIAMETER / 2, STUD_HEIGHT, 8);
   for (let sx = 0; sx < studsX; sx++) {
     for (let sz = 0; sz < studsZ; sz++) {
-      if (catType === CAT.CORNER && sx >= 1 && sz >= 1) continue;
-      if (catType === CAT.SLOPE && sz !== 0) continue;
       const s = studGeo.clone();
       s.translate(
         (sx - studsX / 2 + 0.5) * STUD_SIZE,
@@ -1588,10 +1253,6 @@ function createGhostMesh(typeId, rotation) {
   }
 
   const merged = mergeGeometries(parts.map(g => g.toNonIndexed()));
-
-  if ((catType === CAT.CORNER || catType === CAT.SLOPE) && rotation !== 0) {
-    merged.rotateY(-rotation * Math.PI / 180);
-  }
 
   const mat = new THREE.MeshStandardMaterial({
     color: 0x00ff00, transparent: true, opacity: 0.45, depthWrite: false,
@@ -1624,13 +1285,12 @@ function updateGhost(gridX, gridY, gridZ, valid) {
   }
   if (!ghostMesh) return;
 
-  const cat = BRICK_CATALOG[placeTypeId];
+  const cat = knownTypes[placeTypeId];
   const w = cat.studsX * STUD_SIZE;
   const h = cat.heightUnits * PLATE_HEIGHT;
   const d = cat.studsZ * STUD_SIZE;
 
   if (ghostMesh.userData.isLDrawGhost) {
-    // LDraw ghost: use same corner-origin transform as placed bricks
     const rot = placeRotation || 0;
     const rotRad = -(rot * Math.PI) / 180;
     const cos = Math.cos(rotRad);
@@ -1648,7 +1308,6 @@ function updateGhost(gridX, gridY, gridZ, valid) {
       gridZ * STUD_SIZE + offsetZ,
     );
   } else {
-    // Procedural ghost: center-origin positioning
     let studsX = cat.studsX, studsZ = cat.studsZ;
     if (placeRotation === 90 || placeRotation === 270) [studsX, studsZ] = [studsZ, studsX];
     const gw = studsX * STUD_SIZE;
@@ -1660,7 +1319,6 @@ function updateGhost(gridX, gridY, gridZ, valid) {
     );
   }
 
-  // Update ghost color
   const ghostColor = valid ? 0x00ff00 : 0xff0000;
   ghostMesh.traverse(child => {
     if (child.isMesh && child.material) child.material.color.setHex(ghostColor);
@@ -1690,7 +1348,6 @@ function onPlacementPointerMove(e) {
     cursorOverlay.className = 'cursor-overlay ' + (valid ? 'valid' : 'blocked');
     cursorOverlay.textContent = `Grid: (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}) | ${placeTypeId} ${placeRotation}° | ${valid ? 'VALID' : 'BLOCKED'}`;
   } else {
-    // Unknown type — no ghost, show position only (server validates)
     hideGhost();
     cursorOverlay.style.display = 'block';
     cursorOverlay.className = 'cursor-overlay';
@@ -1709,13 +1366,11 @@ async function onPlacementPointerUp(e) {
   const dist = Math.sqrt(dx * dx + dy * dy);
   pointerDownPos = null;
 
-  // Click vs drag: distance < 5px = click
   if (dist >= 5) return;
 
   const hit = raycastPlacement(e);
   if (!hit) return;
 
-  // Client-side validation only for known types; unknown types rely on server
   const known = !!getPlacementDef(placeTypeId);
   if (known) {
     const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);

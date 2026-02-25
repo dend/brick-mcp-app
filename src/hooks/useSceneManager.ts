@@ -3,7 +3,6 @@ import { SceneManager } from '../three/SceneManager';
 import { GridHelper } from '../three/GridHelper';
 import { SceneReconciler } from '../engine/SceneReconciler';
 import { ldrawPartLoader } from '../ldraw/LDrawPartLoader';
-import { BRICK_CATALOG } from '../bricks/catalog';
 import { registerDynamicType, getBrickType } from '../engine/BrickCatalog';
 import type { SceneData, CameraState } from '../types';
 
@@ -33,20 +32,14 @@ export function useSceneManager(
     const h = { sceneManager, gridHelper, reconciler };
     setHandle(h);
 
-    // Init LDraw loader — parts load via HTTP from /ldraw/
+    // Init LDraw loader — parts load on-demand via HTTP from /ldraw/
     const initLDraw = async () => {
       try {
         await ldrawPartLoader.init();
       } catch (e) {
         console.warn('LDraw init() failed, continuing with defaults', e);
       }
-      // Mark ready even if materials failed — parts load with defaults
       setLdrawReady(true);
-      try {
-        await ldrawPartLoader.preloadParts(BRICK_CATALOG.map(b => b.id));
-      } catch (e) {
-        console.warn('LDraw preloadParts failed', e);
-      }
     };
 
     initLDraw();
