@@ -123,7 +123,8 @@
         <button id="btnPlacement" onclick="togglePlacement()" style="width:100%">Enable Placement</button>
       </div>
       <div class="placement-row">
-        <select id="placeType"></select>
+        <input id="placeType" list="placeTypeList" placeholder="Part ID (e.g. 3001)" style="background:#18181b; border:1px solid #27272a; color:#fafafa; padding:0 8px; border-radius:6px; font-family:'SF Mono','Fira Code',monospace; font-size:11px; height:28px; flex:1;" />
+        <datalist id="placeTypeList"></datalist>
         <button onclick="rotatePlacement()" title="Rotate (R)">R</button>
         <span class="rot-display" id="rotDisplay">0&deg;</span>
       </div>
@@ -204,6 +205,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { LDrawLoader } from 'three/addons/loaders/LDrawLoader.js';
+import { LDrawConditionalLineMaterial } from 'three/addons/materials/LDrawConditionalLineMaterial.js';
 
 // ── Colors (mirrored from src/constants.ts) ──────────────────────────────────
 const DEFAULT_COLORS = [
@@ -350,6 +352,7 @@ const brickMeshMap = new Map(); // id -> mesh/group
 // ── LDraw Part Loading ──────────────────────────────────────────────────────
 const LDRAW_SCALE = 0.05;
 const ldrawLoader = new LDrawLoader();
+ldrawLoader.setConditionalLineMaterial(LDrawConditionalLineMaterial);
 ldrawLoader.smoothNormals = true;
 ldrawLoader.setPartsLibraryPath('/ldraw/');
 const ldrawTemplates = new Map(); // partId -> THREE.Group template
@@ -357,24 +360,42 @@ let ldrawReady = false;
 
 async function initLDraw() {
   try {
+    log('LDraw: preloading materials...', 'dim');
     await ldrawLoader.preloadMaterials('/ldraw/LDConfig.ldr');
+    log('LDraw: materials loaded', 'dim');
+  } catch (e) {
+    log(`LDraw: materials FAILED: ${e.message}`, 'error');
+    console.warn('LDraw preloadMaterials failed', e);
+  }
+
+  // Always mark ready — parts can still load with default materials
+  ldrawReady = true;
+
+  try {
     const partIds = Object.keys(BRICK_CATALOG);
+    let loaded = 0, failed = 0;
     for (const partId of partIds) {
       try {
         const group = await ldrawLoader.loadAsync(`/ldraw/parts/${partId}.dat`);
+        let meshCount = 0;
+        group.traverse(child => { if (child.isMesh) meshCount++; });
         const container = new THREE.Group();
         container.add(group);
         container.scale.set(LDRAW_SCALE, -LDRAW_SCALE, LDRAW_SCALE);
-        // Remove ConditionalLineSegments
+        container.rotation.y = -Math.PI / 2;
         const toRemove = [];
         container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
         toRemove.forEach(obj => obj.parent?.remove(obj));
         ldrawTemplates.set(partId, container);
+        loaded++;
+        if (loaded <= 3) log(`LDraw: ${partId} loaded (${meshCount} meshes)`, 'dim');
       } catch (e) {
+        failed++;
+        log(`LDraw: FAILED ${partId}: ${e.message}`, 'error');
         console.warn(`LDraw: Could not load part ${partId}`, e);
       }
     }
-    ldrawReady = true;
+    log(`LDraw: ${loaded}/${partIds.length} catalog parts loaded, ${failed} failed`, loaded > 0 ? 'info' : 'error');
     console.log(`LDraw loaded ${ldrawTemplates.size} part templates`);
     // Re-render all bricks with LDraw geometry
     if (currentBricks.length > 0) {
@@ -393,7 +414,8 @@ async function initLDraw() {
       reconcileScene(currentBricks);
     }
   } catch (e) {
-    console.warn('LDraw initialization failed, using procedural fallback', e);
+    log(`LDraw: init error: ${e.message}`, 'error');
+    console.warn('LDraw initialization error', e);
   }
 }
 initLDraw();
@@ -405,7 +427,8 @@ function createLDrawBrickMesh(brick) {
   if (!template) return null;
 
   const clone = template.clone();
-  clone.position.set(catalog.studsX * 0.5, 0, catalog.studsZ * 0.5);
+  const h = catalog.heightUnits * PLATE_HEIGHT;
+  clone.position.set(catalog.studsX * 0.5, h, catalog.studsZ * 0.5);
 
   const color = new THREE.Color(brick.color);
   const edgeColor = color.clone().multiplyScalar(0.5);
@@ -430,7 +453,6 @@ function createLDrawBrickMesh(brick) {
   const pos = brick.position;
   const w = catalog.studsX * STUD_SIZE;
   const d = catalog.studsZ * STUD_SIZE;
-  const h = catalog.heightUnits * PLATE_HEIGHT;
   const rot = brick.rotation || 0;
   const rotRad = -(rot * Math.PI) / 180;
   const cos = Math.cos(rotRad);
@@ -450,8 +472,10 @@ function createLDrawBrickMesh(brick) {
 function createBrickMesh(brick) {
   // Try LDraw first
   if (ldrawReady && ldrawTemplates.has(brick.typeId)) {
+    console.log(`createBrickMesh: using LDraw for ${brick.typeId}`);
     return createLDrawBrickMesh(brick);
   }
+  console.log(`createBrickMesh: procedural fallback for ${brick.typeId} (ldrawReady=${ldrawReady}, hasTemplate=${ldrawTemplates.has(brick.typeId)})`);
   // Procedural fallback
   const catalog = BRICK_CATALOG[brick.typeId];
   if (!catalog) return null;
@@ -837,10 +861,62 @@ function parseToolPayload(responseBody) {
 
 let currentBricks = [];
 
+function registerDynamicTypes(dynamicTypes) {
+  if (!dynamicTypes) return;
+  let added = 0;
+  for (const [typeId, def] of Object.entries(dynamicTypes)) {
+    if (!BRICK_CATALOG[typeId]) {
+      BRICK_CATALOG[typeId] = {
+        name: def.name,
+        category: def.category || 'generic',
+        studsX: def.studsX,
+        studsZ: def.studsZ,
+        heightUnits: def.heightUnits,
+      };
+      added++;
+      // Load LDraw template for the new type
+      if (!ldrawTemplates.has(typeId)) {
+        ldrawLoader.loadAsync(`/ldraw/parts/${typeId}.dat`).then(group => {
+          const container = new THREE.Group();
+          container.add(group);
+          container.scale.set(LDRAW_SCALE, -LDRAW_SCALE, LDRAW_SCALE);
+          container.rotation.y = -Math.PI / 2;
+          const toRemove = [];
+          container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
+          toRemove.forEach(obj => obj.parent?.remove(obj));
+          ldrawTemplates.set(typeId, container);
+          // Remove procedural meshes for this type so reconcile recreates them with LDraw
+          for (const brick of currentBricks) {
+            if (brick.typeId === typeId && brickMeshMap.has(brick.id)) {
+              const old = brickMeshMap.get(brick.id);
+              brickGroup.remove(old);
+              old.traverse?.(child => {
+                if (child.material) {
+                  if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+                  else child.material.dispose();
+                }
+              });
+              brickMeshMap.delete(brick.id);
+            }
+          }
+          if (currentBricks.length > 0) reconcileScene(currentBricks);
+        }).catch(e => console.warn(`LDraw: Could not load dynamic part ${typeId}`, e));
+      }
+    }
+  }
+  if (added) {
+    rebuildTypeDropdown();
+    log(`Registered ${added} dynamic type(s)`, 'info');
+  }
+}
+
 function updateSceneDisplay(payload) {
   if (!payload) return;
   document.getElementById('scVersion').textContent = payload.version ?? '-';
   if (payload.scene) {
+    // Register dynamic types before rendering
+    registerDynamicTypes(payload.scene.dynamicTypes);
+
     currentBricks = payload.scene.bricks;
     document.getElementById('scCount').textContent = payload.scene.bricks.length;
 
@@ -1240,22 +1316,28 @@ const cursorOverlay = document.getElementById('cursorOverlay');
 
 // ── Populate placement UI ────────────────────────────────────────────────────
 
-// Brick type dropdown
-const placeTypeSelect = document.getElementById('placeType');
+// Brick type input with datalist suggestions
+const placeTypeInput = document.getElementById('placeType');
+const placeTypeDatalist = document.getElementById('placeTypeList');
 function rebuildTypeDropdown() {
-  const prev = placeTypeSelect.value || placeTypeId;
-  placeTypeSelect.innerHTML = '';
+  placeTypeDatalist.innerHTML = '';
   for (const typeId of Object.keys(BRICK_CATALOG)) {
     const opt = document.createElement('option');
-    opt.value = typeId;
     const entry = BRICK_CATALOG[typeId];
-    opt.textContent = entry.name ? `${typeId} - ${entry.name}` : typeId;
-    placeTypeSelect.appendChild(opt);
+    opt.value = typeId;
+    opt.label = entry.name ? `${typeId} - ${entry.name}` : typeId;
+    placeTypeDatalist.appendChild(opt);
   }
-  placeTypeSelect.value = (prev in BRICK_CATALOG) ? prev : placeTypeId;
 }
 rebuildTypeDropdown();
-placeTypeSelect.addEventListener('change', (e) => { placeTypeId = e.target.value; });
+placeTypeInput.value = placeTypeId;
+placeTypeInput.addEventListener('input', (e) => { placeTypeId = e.target.value.trim(); });
+placeTypeInput.addEventListener('change', (e) => { placeTypeId = e.target.value.trim(); });
+
+// Returns catalog entry for a type, or a 1x1x3 fallback for unknown types
+function getPlacementDef(typeId) {
+  return BRICK_CATALOG[typeId] || null;
+}
 
 // Color palette
 const paletteEl = document.getElementById('colorPalette');
@@ -1392,7 +1474,8 @@ function raycastPlacement(event) {
   // Auto-elevate: if the new brick's physical footprint overlaps any existing brick's
   // physical footprint, place on top of the highest overlapping brick.
   // Uses L-shape footprint for corners so we don't elevate over notch areas.
-  const placeCat = BRICK_CATALOG[placeTypeId];
+  // For unknown types, skip auto-elevation (server handles validation).
+  const placeCat = getPlacementDef(placeTypeId);
   if (placeCat) {
     const newFootprint = getPhysicalFootprintHarness(placeTypeId, gridX, 0, gridZ, placeRotation);
     for (const existing of currentBricks) {
@@ -1427,6 +1510,33 @@ function createGhostMesh(typeId, rotation) {
   const cat = BRICK_CATALOG[typeId];
   if (!cat) return null;
 
+  // Try LDraw geometry for accurate ghost shape
+  const template = ldrawTemplates.get(typeId);
+  if (template) {
+    const clone = template.clone();
+    const gh = cat.heightUnits * PLATE_HEIGHT;
+    clone.position.set(cat.studsX * 0.5, gh, cat.studsZ * 0.5);
+
+    // Make all child materials transparent green
+    const ghostMat = new THREE.MeshStandardMaterial({
+      color: 0x00ff00, transparent: true, opacity: 0.45, depthWrite: false,
+    });
+    clone.traverse(child => {
+      if (child.isMesh) {
+        child.material = ghostMat;
+      } else if (child.isLineSegments) {
+        child.visible = false;
+      }
+    });
+
+    const wrapper = new THREE.Group();
+    wrapper.add(clone);
+    wrapper.renderOrder = 999;
+    wrapper.userData.isLDrawGhost = true;
+    return wrapper;
+  }
+
+  // Procedural fallback for parts without LDraw templates
   const catType = cat.category;
   let studsX = cat.studsX, studsZ = cat.studsZ;
   if (catType !== CAT.CORNER && catType !== CAT.SLOPE && (rotation === 90 || rotation === 270)) [studsX, studsZ] = [studsZ, studsX];
@@ -1438,7 +1548,6 @@ function createGhostMesh(typeId, rotation) {
   const parts = [];
 
   if (catType === CAT.SLOPE) {
-    // 45° slope ghost: flat top at back, slope face on front (pentagon profile)
     const slopeRun = d / 2;
     const frontWallTop = h / 2 - slopeRun;
     const slopeShape = new THREE.Shape();
@@ -1453,7 +1562,6 @@ function createGhostMesh(typeId, rotation) {
     slopeGeo.translate(-w / 2, 0, 0);
     parts.push(slopeGeo);
   } else if (catType === CAT.CORNER) {
-    // L-shaped body: 1-stud-wide arms, notch at +X,+Z before rotation
     const arm1 = new THREE.BoxGeometry(w, h, STUD_SIZE);
     arm1.translate(0, 0, -(d - STUD_SIZE) / 2);
     parts.push(arm1);
@@ -1481,26 +1589,35 @@ function createGhostMesh(typeId, rotation) {
 
   const merged = mergeGeometries(parts.map(g => g.toNonIndexed()));
 
-  // Corner + slope pieces need actual geometry rotation
   if ((catType === CAT.CORNER || catType === CAT.SLOPE) && rotation !== 0) {
     merged.rotateY(-rotation * Math.PI / 180);
   }
 
   const mat = new THREE.MeshStandardMaterial({
-    color: 0x00ff00,
-    transparent: true,
-    opacity: 0.45,
-    depthWrite: false,
+    color: 0x00ff00, transparent: true, opacity: 0.45, depthWrite: false,
   });
   const mesh = new THREE.Mesh(merged, mat);
   mesh.renderOrder = 999;
   return mesh;
 }
 
+function disposeGhostMesh() {
+  if (!ghostMesh) return;
+  scene.remove(ghostMesh);
+  ghostMesh.traverse(child => {
+    if (child.geometry) child.geometry.dispose();
+    if (child.material) {
+      if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+      else child.material.dispose();
+    }
+  });
+  ghostMesh = null;
+}
+
 function updateGhost(gridX, gridY, gridZ, valid) {
   const newKey = `${placeTypeId}_${placeRotation}`;
   if (newKey !== ghostKey || !ghostMesh) {
-    if (ghostMesh) { scene.remove(ghostMesh); if (ghostMesh.geometry) ghostMesh.geometry.dispose(); if (ghostMesh.material) ghostMesh.material.dispose(); }
+    disposeGhostMesh();
     ghostMesh = createGhostMesh(placeTypeId, placeRotation);
     ghostKey = newKey;
     if (ghostMesh) scene.add(ghostMesh);
@@ -1508,20 +1625,46 @@ function updateGhost(gridX, gridY, gridZ, valid) {
   if (!ghostMesh) return;
 
   const cat = BRICK_CATALOG[placeTypeId];
-  let studsX = cat.studsX, studsZ = cat.studsZ;
-  if (placeRotation === 90 || placeRotation === 270) [studsX, studsZ] = [studsZ, studsX];
-
-  const w = studsX * STUD_SIZE;
+  const w = cat.studsX * STUD_SIZE;
   const h = cat.heightUnits * PLATE_HEIGHT;
-  const d = studsZ * STUD_SIZE;
+  const d = cat.studsZ * STUD_SIZE;
 
-  ghostMesh.position.set(
-    gridX * STUD_SIZE + w / 2,
-    gridY * PLATE_HEIGHT + h / 2,
-    gridZ * STUD_SIZE + d / 2,
-  );
+  if (ghostMesh.userData.isLDrawGhost) {
+    // LDraw ghost: use same corner-origin transform as placed bricks
+    const rot = placeRotation || 0;
+    const rotRad = -(rot * Math.PI) / 180;
+    const cos = Math.cos(rotRad);
+    const sin = Math.sin(rotRad);
+    const rx1 = w * cos;
+    const rx2 = d * sin;
+    const offsetX = -Math.min(0, rx1, rx2, rx1 + rx2);
+    const rz1 = -w * sin;
+    const rz2 = d * cos;
+    const offsetZ = -Math.min(0, rz1, rz2, rz1 + rz2);
+    ghostMesh.rotation.y = rotRad;
+    ghostMesh.position.set(
+      gridX * STUD_SIZE + offsetX,
+      gridY * PLATE_HEIGHT,
+      gridZ * STUD_SIZE + offsetZ,
+    );
+  } else {
+    // Procedural ghost: center-origin positioning
+    let studsX = cat.studsX, studsZ = cat.studsZ;
+    if (placeRotation === 90 || placeRotation === 270) [studsX, studsZ] = [studsZ, studsX];
+    const gw = studsX * STUD_SIZE;
+    const gd = studsZ * STUD_SIZE;
+    ghostMesh.position.set(
+      gridX * STUD_SIZE + gw / 2,
+      gridY * PLATE_HEIGHT + h / 2,
+      gridZ * STUD_SIZE + gd / 2,
+    );
+  }
 
-  ghostMesh.material.color.setHex(valid ? 0x00ff00 : 0xff0000);
+  // Update ghost color
+  const ghostColor = valid ? 0x00ff00 : 0xff0000;
+  ghostMesh.traverse(child => {
+    if (child.isMesh && child.material) child.material.color.setHex(ghostColor);
+  });
   ghostMesh.visible = true;
 }
 
@@ -1536,15 +1679,23 @@ function onPlacementPointerMove(e) {
   if (!hit) { hideGhost(); cursorOverlay.style.display = 'none'; return; }
 
   lastGridPos = hit;
-  const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
-  const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
-  const valid = inBounds && !collision;
+  const known = !!getPlacementDef(placeTypeId);
 
-  updateGhost(hit.gridX, hit.gridY, hit.gridZ, valid);
-
-  cursorOverlay.style.display = 'block';
-  cursorOverlay.className = 'cursor-overlay ' + (valid ? 'valid' : 'blocked');
-  cursorOverlay.textContent = `Grid: (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}) | ${placeTypeId} ${placeRotation}° | ${valid ? 'VALID' : 'BLOCKED'}`;
+  if (known) {
+    const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
+    const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
+    const valid = inBounds && !collision;
+    updateGhost(hit.gridX, hit.gridY, hit.gridZ, valid);
+    cursorOverlay.style.display = 'block';
+    cursorOverlay.className = 'cursor-overlay ' + (valid ? 'valid' : 'blocked');
+    cursorOverlay.textContent = `Grid: (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}) | ${placeTypeId} ${placeRotation}° | ${valid ? 'VALID' : 'BLOCKED'}`;
+  } else {
+    // Unknown type — no ghost, show position only (server validates)
+    hideGhost();
+    cursorOverlay.style.display = 'block';
+    cursorOverlay.className = 'cursor-overlay';
+    cursorOverlay.textContent = `Grid: (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}) | ${placeTypeId} ${placeRotation}° | server validates`;
+  }
 }
 
 function onPlacementPointerDown(e) {
@@ -1564,11 +1715,15 @@ async function onPlacementPointerUp(e) {
   const hit = raycastPlacement(e);
   if (!hit) return;
 
-  const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
-  const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
-  if (!inBounds || collision) {
-    log(`Placement blocked at (${hit.gridX}, ${hit.gridY}, ${hit.gridZ})`, 'warn');
-    return;
+  // Client-side validation only for known types; unknown types rely on server
+  const known = !!getPlacementDef(placeTypeId);
+  if (known) {
+    const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
+    const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
+    if (!inBounds || collision) {
+      log(`Placement blocked at (${hit.gridX}, ${hit.gridY}, ${hit.gridZ})`, 'warn');
+      return;
+    }
   }
 
   try {

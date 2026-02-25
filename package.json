@@ -20,8 +20,7 @@
   },
   "scripts": {
     "download:ldraw": "tsx scripts/download-ldraw-parts.ts",
-    "build:ldraw": "tsx scripts/bundle-ldraw.ts",
-    "build": "npm run build:ldraw && tsc --noEmit && cross-env INPUT=mcp-app.html vite build && tsc -p tsconfig.server.json && esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:express --external:cors --external:@modelcontextprotocol/sdk --external:@modelcontextprotocol/ext-apps --external:zod && esbuild main.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:./server.js --external:express --external:cors --external:@modelcontextprotocol/sdk --external:@modelcontextprotocol/ext-apps --banner:js=\"#!/usr/bin/env node\"",
+    "build": "tsc --noEmit && cross-env INPUT=mcp-app.html vite build && tsc -p tsconfig.server.json && esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:express --external:cors --external:@modelcontextprotocol/sdk --external:@modelcontextprotocol/ext-apps --external:zod && esbuild main.ts --bundle --platform=node --format=esm --outfile=dist/index.js --external:./server.js --external:express --external:cors --external:@modelcontextprotocol/sdk --external:@modelcontextprotocol/ext-apps --banner:js=\"#!/usr/bin/env node\"",
     "build:client": "cross-env INPUT=mcp-app.html vite build",
     "watch": "cross-env INPUT=mcp-app.html vite build --watch",
     "serve": "tsx --watch main.ts",

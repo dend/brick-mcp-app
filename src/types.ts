@@ -19,6 +19,7 @@ export interface SceneData {
   name: string;
   bricks: BrickInstance[];
   camera?: CameraState;
+  dynamicTypes?: Record<string, BrickDefinition>;
 }
 
 export interface ScenePayload {

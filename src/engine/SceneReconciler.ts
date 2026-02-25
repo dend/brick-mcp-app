@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import type { BrickInstance } from '../types';
 import { getBrickType } from './BrickCatalog';
 import { createBrickMesh, applyBrickTransform, updateBrickColor } from '../three/BrickMesh';
+import { ldrawPartLoader } from '../ldraw/LDrawPartLoader';
 
 export class SceneReconciler {
   private meshMap = new Map<string, THREE.Object3D>();
@@ -27,9 +28,17 @@ export class SceneReconciler {
     for (const brick of bricks) {
       const existing = this.meshMap.get(brick.id);
       if (existing) {
-        // Update existing
         const bt = getBrickType(brick.typeId);
-        if (bt) {
+        if (!bt) continue;
+
+        // Upgrade procedural → LDraw when template becomes available
+        if (existing.userData.procedural && ldrawPartLoader.getTemplate(bt.id)) {
+          this.parent.remove(existing);
+          this.disposeObject(existing);
+          const obj = createBrickMesh(brick, bt);
+          this.parent.add(obj);
+          this.meshMap.set(brick.id, obj);
+        } else {
           applyBrickTransform(existing, brick, bt);
           updateBrickColor(existing, brick.color);
         }

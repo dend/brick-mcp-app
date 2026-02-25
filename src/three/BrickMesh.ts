@@ -30,6 +30,7 @@ function createLDrawMesh(brick: BrickInstance, brickType: BrickType): THREE.Obje
   const wrapper = new THREE.Group();
   wrapper.add(obj);
   wrapper.userData.brickId = brick.id;
+  wrapper.userData.procedural = false;
 
   applyBrickTransform(wrapper, brick, brickType);
   return wrapper;
@@ -47,6 +48,7 @@ function createProceduralMesh(brick: BrickInstance, brickType: BrickType): THREE
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.userData.brickId = brick.id;
+  mesh.userData.procedural = true;
 
   applyBrickTransform(mesh, brick, brickType);
   return mesh;

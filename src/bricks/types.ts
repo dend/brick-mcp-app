@@ -7,7 +7,7 @@ export interface BlockoutZone {
 export interface BrickDefinition {
   id: string;
   name: string;
-  category: 'brick' | 'plate' | 'slope' | 'technic' | 'corner';
+  category: 'brick' | 'plate' | 'slope' | 'technic' | 'corner' | 'generic';
   studsX: number;
   studsZ: number;
   heightUnits: number;

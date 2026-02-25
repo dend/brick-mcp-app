@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { LDrawLoader } from 'three/examples/jsm/loaders/LDrawLoader.js';
+import { LDrawConditionalLineMaterial } from 'three/examples/jsm/materials/LDrawConditionalLineMaterial.js';
 import type { BrickDefinition } from '../bricks/types';
+import { PLATE_HEIGHT } from '../constants';
 
 /**
  * LDraw coordinate system:
@@ -15,86 +17,30 @@ const LDRAW_SCALE = 0.05;
 export class LDrawPartLoader {
   private cache = new Map<string, THREE.Group>();
   private loader: LDrawLoader;
+  private libraryPath = '/ldraw/';
   private _ready = false;
 
   constructor() {
     this.loader = new LDrawLoader(new THREE.LoadingManager());
+    this.loader.setConditionalLineMaterial(LDrawConditionalLineMaterial);
     this.loader.smoothNormals = true;
   }
 
   /**
-   * Initialize the loader with either embedded file data or a library path.
+   * Initialize the loader with an HTTP library path.
    * Must be called before getTemplate/createColoredClone.
    */
-  async init(opts: {
-    embeddedFiles?: Record<string, string>;
-    libraryPath?: string;
-  }): Promise<void> {
-    if (opts.embeddedFiles && Object.keys(opts.embeddedFiles).length > 0) {
-      this.initEmbedded(opts.embeddedFiles);
-    } else if (opts.libraryPath) {
-      this.loader.setPartsLibraryPath(opts.libraryPath);
-    }
+  async init(libraryPath = '/ldraw/'): Promise<void> {
+    this.libraryPath = libraryPath;
+    this.loader.setPartsLibraryPath(libraryPath);
+    this._ready = true;
 
-    // Preload materials from LDConfig.ldr
+    // Preload materials from LDConfig.ldr (non-critical — default colors work fine)
     try {
-      await this.loader.preloadMaterials('LDConfig.ldr');
+      await this.loader.preloadMaterials(`${libraryPath}LDConfig.ldr`);
     } catch (e) {
       console.warn('LDrawPartLoader: Could not preload LDConfig.ldr, using default colors', e);
     }
-
-    this._ready = true;
-  }
-
-  private initEmbedded(files: Record<string, string>): void {
-    // Create blob URLs for each embedded file and set up a file map
-    const fileMap: Record<string, string> = {};
-
-    for (const [filePath, content] of Object.entries(files)) {
-      const blob = new Blob([content], { type: 'text/plain' });
-      const blobUrl = URL.createObjectURL(blob);
-      // LDrawLoader expects lowercase paths
-      fileMap[filePath.toLowerCase()] = blobUrl;
-    }
-
-    // Custom loading manager that resolves from our blob URLs
-    const manager = new THREE.LoadingManager();
-
-    // Set the loader's manager and configure URL resolution
-    this.loader.manager = manager;
-
-    // Override the file map for the loader
-    (this.loader as any).fileMap = fileMap;
-
-    manager.setURLModifier((url: string) => {
-      // Normalize the URL to a relative path
-      const normalized = url
-        .replace(/^.*\/ldraw\//, '')
-        .replace(/^\.\//, '')
-        .toLowerCase();
-
-      if (fileMap[normalized]) {
-        return fileMap[normalized];
-      }
-
-      // Try with parts/ or p/ prefix
-      for (const prefix of ['parts/', 'p/', 'parts/s/', 'p/48/', 'p/8/']) {
-        const prefixed = prefix + normalized;
-        if (fileMap[prefixed]) {
-          return fileMap[prefixed];
-        }
-      }
-
-      // Try without prefix
-      const baseName = normalized.split('/').pop()!;
-      for (const [key, blobUrl] of Object.entries(fileMap)) {
-        if (key.endsWith('/' + baseName) || key === baseName) {
-          return blobUrl;
-        }
-      }
-
-      return url;
-    });
   }
 
   isReady(): boolean {
@@ -111,7 +57,7 @@ export class LDrawPartLoader {
     }
 
     try {
-      const group = await this.loader.loadAsync(`parts/${partId}.dat`) as THREE.Group;
+      const group = await this.loader.loadAsync(`${this.libraryPath}parts/${partId}.dat`) as THREE.Group;
       const template = this.prepareTemplate(group, partId);
       this.cache.set(partId, template);
       return template;
@@ -141,6 +87,10 @@ export class LDrawPartLoader {
     // LDraw: 1 stud = 20 LDU, -Y is up
     container.scale.set(LDRAW_SCALE, -LDRAW_SCALE, LDRAW_SCALE);
 
+    // Rotate -90° around Y to align LDraw axes with our convention:
+    // LDraw X (width) → scene Z (studsZ), LDraw Z (depth) → scene X (studsX)
+    container.rotation.y = -Math.PI / 2;
+
     // Remove ConditionalLineSegments — they're decorative edge hints
     const toRemove: THREE.Object3D[] = [];
     container.traverse((child) => {
@@ -169,11 +119,11 @@ export class LDrawPartLoader {
 
     const clone = template.clone();
 
-    // Apply origin shift: LDraw parts are centered on their origin,
-    // but our system uses corner-origin (0,0 is the min corner).
-    // The LDraw template is already scaled, so shift by half the brick size
-    // in stud units (which equals world units since STUD_SIZE=1).
-    clone.position.set(def.studsX * 0.5, 0, def.studsZ * 0.5);
+    // Apply origin shift:
+    // X/Z: LDraw parts are centered, but our system uses corner-origin (0,0 = min corner)
+    // Y: LDraw Y=0 is the top surface; shift down by brick height so bottom is at Y=0
+    const h = def.heightUnits * PLATE_HEIGHT;
+    clone.position.set(def.studsX * 0.5, h, def.studsZ * 0.5);
 
     // Override materials with our color
     const threeColor = new THREE.Color(color);

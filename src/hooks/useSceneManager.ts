@@ -3,8 +3,8 @@ import { SceneManager } from '../three/SceneManager';
 import { GridHelper } from '../three/GridHelper';
 import { SceneReconciler } from '../engine/SceneReconciler';
 import { ldrawPartLoader } from '../ldraw/LDrawPartLoader';
-import { LDRAW_FILES } from '../ldraw/ldraw-bundle';
 import { BRICK_CATALOG } from '../bricks/catalog';
+import { registerDynamicType, getBrickType } from '../engine/BrickCatalog';
 import type { SceneData, CameraState } from '../types';
 
 export interface SceneManagerHandle {
@@ -33,19 +33,19 @@ export function useSceneManager(
     const h = { sceneManager, gridHelper, reconciler };
     setHandle(h);
 
-    // Init LDraw loader in parallel — scene works immediately with procedural fallback
+    // Init LDraw loader — parts load via HTTP from /ldraw/
     const initLDraw = async () => {
       try {
-        const hasFiles = Object.keys(LDRAW_FILES).length > 0;
-        await ldrawPartLoader.init({
-          embeddedFiles: hasFiles ? LDRAW_FILES : undefined,
-        });
-        if (hasFiles) {
-          await ldrawPartLoader.preloadParts(BRICK_CATALOG.map(b => b.id));
-        }
-        setLdrawReady(true);
+        await ldrawPartLoader.init();
       } catch (e) {
-        console.warn('LDraw initialization failed, using procedural fallback', e);
+        console.warn('LDraw init() failed, continuing with defaults', e);
+      }
+      // Mark ready even if materials failed — parts load with defaults
+      setLdrawReady(true);
+      try {
+        await ldrawPartLoader.preloadParts(BRICK_CATALOG.map(b => b.id));
+      } catch (e) {
+        console.warn('LDraw preloadParts failed', e);
       }
     };
 
@@ -63,6 +63,41 @@ export function useSceneManager(
     if (!handle || !sceneData || !ldrawReady) return;
     handle.reconciler.reconcile(sceneData.bricks);
   }, [ldrawReady, handle]);
+
+  // Register dynamic types from scene data and trigger async LDraw loads
+  useEffect(() => {
+    if (!handle || !sceneData?.dynamicTypes) return;
+
+    let needsReReconcile = false;
+    const loadPromises: Promise<void>[] = [];
+
+    for (const [typeId, def] of Object.entries(sceneData.dynamicTypes)) {
+      if (!getBrickType(typeId)) {
+        registerDynamicType(def);
+        needsReReconcile = true;
+      }
+      // Trigger async LDraw load if not already cached
+      if (!ldrawPartLoader.getTemplate(typeId)) {
+        loadPromises.push(
+          ldrawPartLoader.loadPart(typeId).then((result) => {
+            if (result) needsReReconcile = true;
+          }),
+        );
+      }
+    }
+
+    // Reconcile immediately if we registered new types (procedural fallback)
+    if (needsReReconcile) {
+      handle.reconciler.reconcile(sceneData.bricks);
+    }
+
+    // When LDraw meshes finish loading, re-reconcile to upgrade procedural → LDraw
+    if (loadPromises.length > 0) {
+      Promise.allSettled(loadPromises).then(() => {
+        if (sceneData) handle.reconciler.reconcile(sceneData.bricks);
+      });
+    }
+  }, [sceneData?.dynamicTypes, handle]);
 
   // Reconcile scene data
   useEffect(() => {

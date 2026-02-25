@@ -11,13 +11,21 @@ import path from "node:path";
 import { z } from "zod";
 import type { BrickDefinition } from "./src/bricks/types.js";
 import { BRICK_CATALOG, getBrickType } from "./src/bricks/catalog.js";
+import { parseLDrawPart, setLDrawDir } from "./src/ldraw/ldraw-dimensions.js";
+
+// Initialize LDraw directory for the server-side parser
+const LDRAW_DIR = path.join(
+  import.meta.filename.endsWith(".ts") ? import.meta.dirname : path.join(import.meta.dirname, ".."),
+  "ldraw",
+);
+setLDrawDir(LDRAW_DIR);
 
 const DIST_DIR = import.meta.filename.endsWith(".ts")
   ? path.join(import.meta.dirname, "dist")
   : import.meta.dirname;
 
 function findBrickType(typeId: string): BrickDefinition | undefined {
-  return getBrickType(typeId);
+  return getBrickType(typeId) ?? parseLDrawPart(typeId) ?? undefined;
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -391,7 +399,7 @@ Use footprint.maxX from each response for the next brick's x:
 
 ## Rules
 - Build BOTTOM-UP: y=0 first, then y=3, y=6, etc. Floating bricks are rejected.
-- Use exact typeId values from brick_get_available. Wrong IDs are rejected.
+- Use typeId values from brick_get_available for curated parts. You can also use any LDraw part number (e.g. "2454", "3039") — the server will auto-detect dimensions from the LDraw library.
 - Each brick_place returns success with the brick ID, or an error explaining why it failed. Read the error and adjust.
 - Rotation swaps dimensions — account for this when tiling.
 - ALL bricks must fit within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. The brick's full footprint (position + studs size) must not exceed x=${BASEPLATE_SIZE - 1} or z=${BASEPLATE_SIZE - 1}. Out-of-bounds placements are rejected.
@@ -433,12 +441,27 @@ export function createServer(): McpServer {
     name: "Brick Builder",
     version: "1.0.0",
   }, {
-    instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Brick type IDs are LDraw part numbers (e.g. "3001" = Brick 2x4). Do not guess type IDs — call brick_get_available to see the full catalog.`,
+    instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Brick type IDs are LDraw part numbers (e.g. "3001" = Brick 2x4). Call brick_get_available to see the curated catalog, but you can also use any valid LDraw part number — dimensions are auto-detected.`,
   });
 
+  function collectDynamicTypes(): Record<string, BrickDefinition> | undefined {
+    const dynamic: Record<string, BrickDefinition> = {};
+    for (const brick of scene.bricks) {
+      if (!getBrickType(brick.typeId)) {
+        const def = findBrickType(brick.typeId);
+        if (def) dynamic[brick.typeId] = def;
+      }
+    }
+    return Object.keys(dynamic).length > 0 ? dynamic : undefined;
+  }
+
   function scenePayload(message?: string) {
+    const dynamicTypes = collectDynamicTypes();
     return {
-      scene,
+      scene: {
+        ...scene,
+        ...(dynamicTypes ? { dynamicTypes } : {}),
+      },
       ...(message ? { message } : {}),
     };
   }
@@ -597,9 +620,14 @@ export function createServer(): McpServer {
           },
         };
       });
+      const dynamicTypes = collectDynamicTypes();
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          scene: { ...scene, bricks: bricksWithFootprints },
+          scene: {
+            ...scene,
+            bricks: bricksWithFootprints,
+            ...(dynamicTypes ? { dynamicTypes } : {}),
+          },
         }) }],
       };
     },
