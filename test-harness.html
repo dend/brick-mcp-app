@@ -191,7 +191,7 @@
           <option value="brick_poll_scene">brick_poll_scene</option>
           <option value="brick_export_scene">brick_export_scene</option>
         </select>
-        <textarea id="toolArgs" placeholder='{"typeId":"brick_2x4",...}'>{}</textarea>
+        <textarea id="toolArgs" placeholder='{"typeId":"3001",...}'>{}</textarea>
         <button class="primary" onclick="callManualTool()">Call</button>
       </div>
       <div id="manualResult"></div>
@@ -203,6 +203,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { LDrawLoader } from 'three/addons/loaders/LDrawLoader.js';
 
 // ── Colors (mirrored from src/constants.ts) ──────────────────────────────────
 const DEFAULT_COLORS = [
@@ -235,44 +236,38 @@ const BASEPLATE_SIZE = 48;
 // Brick categories
 const CAT = { BRICK: 'brick', PLATE: 'plate', SLOPE: 'slope', TECHNIC: 'technic', CORNER: 'corner' };
 
-// Brick catalog (mirrored from server.ts)
+// Brick catalog using LDraw part numbers (mirrored from server catalog)
 const BRICK_CATALOG = {
-  brick_1x1:   { category: CAT.BRICK,   studsX: 1, studsZ: 1, heightUnits: 3 },
-  brick_1x2:   { category: CAT.BRICK,   studsX: 1, studsZ: 2, heightUnits: 3 },
-  brick_1x3:   { category: CAT.BRICK,   studsX: 1, studsZ: 3, heightUnits: 3 },
-  brick_1x4:   { category: CAT.BRICK,   studsX: 1, studsZ: 4, heightUnits: 3 },
-  brick_1x6:   { category: CAT.BRICK,   studsX: 1, studsZ: 6, heightUnits: 3 },
-  brick_1x8:   { category: CAT.BRICK,   studsX: 1, studsZ: 8, heightUnits: 3 },
-  brick_2x2:   { category: CAT.BRICK,   studsX: 2, studsZ: 2, heightUnits: 3 },
-  brick_2x3:   { category: CAT.BRICK,   studsX: 2, studsZ: 3, heightUnits: 3 },
-  brick_2x4:   { category: CAT.BRICK,   studsX: 2, studsZ: 4, heightUnits: 3 },
-  brick_2x6:   { category: CAT.BRICK,   studsX: 2, studsZ: 6, heightUnits: 3 },
-  brick_2x8:   { category: CAT.BRICK,   studsX: 2, studsZ: 8, heightUnits: 3 },
-  plate_1x1:   { category: CAT.PLATE,   studsX: 1, studsZ: 1, heightUnits: 1 },
-  plate_1x2:   { category: CAT.PLATE,   studsX: 1, studsZ: 2, heightUnits: 1 },
-  plate_1x4:   { category: CAT.PLATE,   studsX: 1, studsZ: 4, heightUnits: 1 },
-  plate_2x2:   { category: CAT.PLATE,   studsX: 2, studsZ: 2, heightUnits: 1 },
-  plate_2x4:   { category: CAT.PLATE,   studsX: 2, studsZ: 4, heightUnits: 1 },
-  plate_2x6:   { category: CAT.PLATE,   studsX: 2, studsZ: 6, heightUnits: 1 },
-  plate_4x4:   { category: CAT.PLATE,   studsX: 4, studsZ: 4, heightUnits: 1 },
-  plate_6x6:   { category: CAT.PLATE,   studsX: 6, studsZ: 6, heightUnits: 1 },
-  plate_8x8:   { category: CAT.PLATE,   studsX: 8, studsZ: 8, heightUnits: 1 },
-  plate_12x4:  { category: CAT.PLATE,   studsX: 12, studsZ: 4, heightUnits: 1 },
-  plate_12x6:  { category: CAT.PLATE,   studsX: 12, studsZ: 6, heightUnits: 1 },
-  plate_12x8:  { category: CAT.PLATE,   studsX: 12, studsZ: 8, heightUnits: 1 },
-  plate_16x1:  { category: CAT.PLATE,   studsX: 16, studsZ: 1, heightUnits: 1 },
-  plate_16x2:  { category: CAT.PLATE,   studsX: 16, studsZ: 2, heightUnits: 1 },
-  plate_16x4:  { category: CAT.PLATE,   studsX: 16, studsZ: 4, heightUnits: 1 },
-  plate_16x6:  { category: CAT.PLATE,   studsX: 16, studsZ: 6, heightUnits: 1 },
-  plate_16x8:  { category: CAT.PLATE,   studsX: 16, studsZ: 8, heightUnits: 1 },
-  slope_2x2:   { category: CAT.SLOPE,   studsX: 2, studsZ: 2, heightUnits: 3 },
-  technic_1x2: { category: CAT.TECHNIC, studsX: 1, studsZ: 2, heightUnits: 3 },
-  technic_1x4: { category: CAT.TECHNIC, studsX: 1, studsZ: 4, heightUnits: 3 },
-  technic_1x6: { category: CAT.TECHNIC, studsX: 1, studsZ: 6, heightUnits: 3 },
-  technic_1x8: { category: CAT.TECHNIC, studsX: 1, studsZ: 8, heightUnits: 3 },
-  technic_2x4: { category: CAT.TECHNIC, studsX: 2, studsZ: 4, heightUnits: 3 },
-  corner_2x2:  { category: CAT.CORNER,  studsX: 2, studsZ: 2, heightUnits: 3 },
-  corner_3x3:  { category: CAT.CORNER,  studsX: 3, studsZ: 3, heightUnits: 3 },
+  '3005': { name: 'Brick 1x1',  category: CAT.BRICK,   studsX: 1, studsZ: 1, heightUnits: 3 },
+  '3004': { name: 'Brick 1x2',  category: CAT.BRICK,   studsX: 1, studsZ: 2, heightUnits: 3 },
+  '3622': { name: 'Brick 1x3',  category: CAT.BRICK,   studsX: 1, studsZ: 3, heightUnits: 3 },
+  '3010': { name: 'Brick 1x4',  category: CAT.BRICK,   studsX: 1, studsZ: 4, heightUnits: 3 },
+  '3009': { name: 'Brick 1x6',  category: CAT.BRICK,   studsX: 1, studsZ: 6, heightUnits: 3 },
+  '3008': { name: 'Brick 1x8',  category: CAT.BRICK,   studsX: 1, studsZ: 8, heightUnits: 3 },
+  '3003': { name: 'Brick 2x2',  category: CAT.BRICK,   studsX: 2, studsZ: 2, heightUnits: 3 },
+  '3002': { name: 'Brick 2x3',  category: CAT.BRICK,   studsX: 2, studsZ: 3, heightUnits: 3 },
+  '3001': { name: 'Brick 2x4',  category: CAT.BRICK,   studsX: 2, studsZ: 4, heightUnits: 3 },
+  '2456': { name: 'Brick 2x6',  category: CAT.BRICK,   studsX: 2, studsZ: 6, heightUnits: 3 },
+  '3007': { name: 'Brick 2x8',  category: CAT.BRICK,   studsX: 2, studsZ: 8, heightUnits: 3 },
+  '3024': { name: 'Plate 1x1',  category: CAT.PLATE,   studsX: 1, studsZ: 1, heightUnits: 1 },
+  '3023': { name: 'Plate 1x2',  category: CAT.PLATE,   studsX: 1, studsZ: 2, heightUnits: 1 },
+  '3710': { name: 'Plate 1x4',  category: CAT.PLATE,   studsX: 1, studsZ: 4, heightUnits: 1 },
+  '3022': { name: 'Plate 2x2',  category: CAT.PLATE,   studsX: 2, studsZ: 2, heightUnits: 1 },
+  '3020': { name: 'Plate 2x4',  category: CAT.PLATE,   studsX: 2, studsZ: 4, heightUnits: 1 },
+  '3795': { name: 'Plate 2x6',  category: CAT.PLATE,   studsX: 2, studsZ: 6, heightUnits: 1 },
+  '3031': { name: 'Plate 4x4',  category: CAT.PLATE,   studsX: 4, studsZ: 4, heightUnits: 1 },
+  '3958': { name: 'Plate 6x6',  category: CAT.PLATE,   studsX: 6, studsZ: 6, heightUnits: 1 },
+  '3036': { name: 'Plate 6x8',  category: CAT.PLATE,   studsX: 6, studsZ: 8, heightUnits: 1 },
+  '3035': { name: 'Plate 4x8',  category: CAT.PLATE,   studsX: 4, studsZ: 8, heightUnits: 1 },
+  '4477': { name: 'Plate 1x10', category: CAT.PLATE,   studsX: 1, studsZ: 10, heightUnits: 1 },
+  '3039': { name: 'Slope 45 2x2', category: CAT.SLOPE,   studsX: 2, studsZ: 2, heightUnits: 3 },
+  '3700': { name: 'Technic 1x2', category: CAT.TECHNIC, studsX: 1, studsZ: 2, heightUnits: 3 },
+  '3701': { name: 'Technic 1x4', category: CAT.TECHNIC, studsX: 1, studsZ: 4, heightUnits: 3 },
+  '3894': { name: 'Technic 1x6', category: CAT.TECHNIC, studsX: 1, studsZ: 6, heightUnits: 3 },
+  '3702': { name: 'Technic 1x8', category: CAT.TECHNIC, studsX: 1, studsZ: 8, heightUnits: 3 },
+  '3709': { name: 'Technic 2x4', category: CAT.TECHNIC, studsX: 2, studsZ: 4, heightUnits: 3 },
+  '2357': { name: 'Corner 2x2',  category: CAT.CORNER,  studsX: 2, studsZ: 2, heightUnits: 3 },
+  '2462': { name: 'Corner 3x3',  category: CAT.CORNER,  studsX: 3, studsZ: 3, heightUnits: 3 },
 };
 
 // ── Three.js Scene Setup ─────────────────────────────────────────────────────
@@ -350,9 +345,114 @@ scene.add(groundPlane);
 // Brick group — all bricks go here
 const brickGroup = new THREE.Group();
 scene.add(brickGroup);
-const brickMeshMap = new Map(); // id -> mesh
+const brickMeshMap = new Map(); // id -> mesh/group
+
+// ── LDraw Part Loading ──────────────────────────────────────────────────────
+const LDRAW_SCALE = 0.05;
+const ldrawLoader = new LDrawLoader();
+ldrawLoader.smoothNormals = true;
+ldrawLoader.setPartsLibraryPath('/ldraw/');
+const ldrawTemplates = new Map(); // partId -> THREE.Group template
+let ldrawReady = false;
+
+async function initLDraw() {
+  try {
+    await ldrawLoader.preloadMaterials('/ldraw/LDConfig.ldr');
+    const partIds = Object.keys(BRICK_CATALOG);
+    for (const partId of partIds) {
+      try {
+        const group = await ldrawLoader.loadAsync(`/ldraw/parts/${partId}.dat`);
+        const container = new THREE.Group();
+        container.add(group);
+        container.scale.set(LDRAW_SCALE, -LDRAW_SCALE, LDRAW_SCALE);
+        // Remove ConditionalLineSegments
+        const toRemove = [];
+        container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
+        toRemove.forEach(obj => obj.parent?.remove(obj));
+        ldrawTemplates.set(partId, container);
+      } catch (e) {
+        console.warn(`LDraw: Could not load part ${partId}`, e);
+      }
+    }
+    ldrawReady = true;
+    console.log(`LDraw loaded ${ldrawTemplates.size} part templates`);
+    // Re-render all bricks with LDraw geometry
+    if (currentBricks.length > 0) {
+      for (const [id, mesh] of brickMeshMap) {
+        brickGroup.remove(mesh);
+        if (mesh.geometry) mesh.geometry.dispose();
+        if (mesh.material) mesh.material.dispose();
+        mesh.traverse?.(child => {
+          if (child.material) {
+            if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+            else child.material.dispose();
+          }
+        });
+      }
+      brickMeshMap.clear();
+      reconcileScene(currentBricks);
+    }
+  } catch (e) {
+    console.warn('LDraw initialization failed, using procedural fallback', e);
+  }
+}
+initLDraw();
+
+function createLDrawBrickMesh(brick) {
+  const catalog = BRICK_CATALOG[brick.typeId];
+  if (!catalog) return null;
+  const template = ldrawTemplates.get(brick.typeId);
+  if (!template) return null;
+
+  const clone = template.clone();
+  clone.position.set(catalog.studsX * 0.5, 0, catalog.studsZ * 0.5);
+
+  const color = new THREE.Color(brick.color);
+  const edgeColor = color.clone().multiplyScalar(0.5);
+  clone.traverse(child => {
+    if (child.isMesh) {
+      child.material = new THREE.MeshStandardMaterial({
+        color, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide,
+      });
+      child.castShadow = true;
+      child.receiveShadow = true;
+      child.userData.brickId = brick.id;
+    } else if (child.isLineSegments) {
+      child.material = new THREE.LineBasicMaterial({ color: edgeColor });
+    }
+  });
+
+  const wrapper = new THREE.Group();
+  wrapper.add(clone);
+  wrapper.userData.brickId = brick.id;
+
+  // Position
+  const pos = brick.position;
+  const w = catalog.studsX * STUD_SIZE;
+  const d = catalog.studsZ * STUD_SIZE;
+  const h = catalog.heightUnits * PLATE_HEIGHT;
+  const rot = brick.rotation || 0;
+  const rotRad = -(rot * Math.PI) / 180;
+  const cos = Math.cos(rotRad);
+  const sin = Math.sin(rotRad);
+  const rx1 = w * cos;
+  const rx2 = d * sin;
+  const offsetX = -Math.min(0, rx1, rx2, rx1 + rx2);
+  const rz1 = -w * sin;
+  const rz2 = d * cos;
+  const offsetZ = -Math.min(0, rz1, rz2, rz1 + rz2);
+  wrapper.rotation.y = rotRad;
+  wrapper.position.set(pos.x * STUD_SIZE + offsetX, pos.y * PLATE_HEIGHT, pos.z * STUD_SIZE + offsetZ);
+
+  return wrapper;
+}
 
 function createBrickMesh(brick) {
+  // Try LDraw first
+  if (ldrawReady && ldrawTemplates.has(brick.typeId)) {
+    return createLDrawBrickMesh(brick);
+  }
+  // Procedural fallback
   const catalog = BRICK_CATALOG[brick.typeId];
   if (!catalog) return null;
 
@@ -637,11 +737,18 @@ function reconcileScene(bricks) {
   const incoming = new Set(bricks.map(b => b.id));
 
   // Remove deleted bricks
-  for (const [id, mesh] of brickMeshMap) {
+  for (const [id, obj] of brickMeshMap) {
     if (!incoming.has(id)) {
-      brickGroup.remove(mesh);
-      mesh.geometry.dispose();
-      mesh.material.dispose();
+      brickGroup.remove(obj);
+      // Dispose materials (handle both Mesh and Group)
+      obj.traverse?.(child => {
+        if (child.material) {
+          if (Array.isArray(child.material)) child.material.forEach(m => m.dispose());
+          else child.material.dispose();
+        }
+      });
+      if (obj.geometry) obj.geometry.dispose();
+      if (obj.material) obj.material.dispose();
       brickMeshMap.delete(id);
     }
   }
@@ -851,25 +958,25 @@ window.quickBuild = async function() {
   const bricks = [];
   const colors = ['#cc0000', '#0055bf', '#ffd700', '#00852b'];
   const BP = 48; // baseplate size in studs
-  const brickLen = 4; // brick_2x4 is 2 wide x 4 long
+  const brickLen = 4; // 3001 (Brick 2x4) is 2 wide x 4 long
   const brickW = 2;
   let ci = 0;
 
   // Front wall (Z=0, bricks along X)
   for (let x = 0; x < BP; x += brickLen) {
-    bricks.push({ typeId: 'brick_2x4', x, y: 0, z: 0, rotation: '0', color: colors[ci++ % 4] });
+    bricks.push({ typeId: '3001', x, y: 0, z: 0, rotation: '0', color: colors[ci++ % 4] });
   }
   // Back wall (Z=46, bricks along X)
   for (let x = 0; x < BP; x += brickLen) {
-    bricks.push({ typeId: 'brick_2x4', x, y: 0, z: BP - brickW, rotation: '0', color: colors[ci++ % 4] });
+    bricks.push({ typeId: '3001', x, y: 0, z: BP - brickW, rotation: '0', color: colors[ci++ % 4] });
   }
   // Left wall (X=0, bricks along Z, rotated 90)
   for (let z = brickW; z < BP - brickW; z += brickLen) {
-    bricks.push({ typeId: 'brick_2x4', x: 0, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
+    bricks.push({ typeId: '3001', x: 0, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
   }
   // Right wall (X=46, bricks along Z, rotated 90)
   for (let z = brickW; z < BP - brickW; z += brickLen) {
-    bricks.push({ typeId: 'brick_2x4', x: BP - brickW, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
+    bricks.push({ typeId: '3001', x: BP - brickW, y: 0, z, rotation: '90', color: colors[ci++ % 4] });
   }
 
   try {
@@ -884,7 +991,7 @@ window.quickAdd = async function() {
   const colors = ['#cc0000', '#0055bf', '#ffd700', '#00852b', '#f2f3f2', '#fe8a18'];
   const color = colors[Math.floor(Math.random() * colors.length)];
   try {
-    const { payload: p, x, y, z } = await addBrickSafe('brick_2x4', color);
+    const { payload: p, x, y, z } = await addBrickSafe('3001', color);
     updateSceneDisplay(p);
     log(`Added at (${x},${y},${z}) -> ${p?.scene?.bricks?.length} bricks, v${p?.version}`, 'pass');
   } catch (e) { log(`Add failed: ${e.message}`, 'fail'); }
@@ -896,7 +1003,7 @@ window.quickTower = async function() {
   const colors = ['#cc0000', '#0055bf', '#ffd700', '#00852b', '#fe8a18', '#923978'];
   for (let i = 0; i < 6; i++) {
     bricks.push({
-      typeId: 'brick_2x2', x: 24, y: i * 3, z: 24,
+      typeId: '3003', x: 24, y: i * 3, z: 24,
       rotation: '0', color: colors[i],
     });
   }
@@ -1002,9 +1109,9 @@ const tests = {
     log('Test: Build 3 bricks', 'header');
     const resp = await callTool('brick_place', {
       bricks: [
-        { typeId: 'brick_2x4', x: 0, y: 0, z: 0, color: '#cc0000' },
-        { typeId: 'brick_2x4', x: 0, y: 0, z: 4, color: '#0055bf' },
-        { typeId: 'brick_2x4', x: 0, y: 0, z: 8, color: '#00852b' },
+        { typeId: '3001', x: 0, y: 0, z: 0, color: '#cc0000' },
+        { typeId: '3001', x: 0, y: 0, z: 4, color: '#0055bf' },
+        { typeId: '3001', x: 0, y: 0, z: 8, color: '#00852b' },
       ],
     });
     const p = parseToolPayload(resp.body);
@@ -1022,7 +1129,7 @@ const tests = {
     log('Test: Add single brick', 'header');
     const before = parseToolPayload((await callTool('brick_get_scene')).body);
     const n = before?.scene?.bricks?.length ?? 0;
-    const { payload: p, x, y, z } = await addBrickSafe('brick_1x1', '#ffd700');
+    const { payload: p, x, y, z } = await addBrickSafe('3005', '#ffd700');
     log(`  Placed at (${x},${y},${z})`, 'dim');
     updateSceneDisplay(p);
     assert(p?.scene?.bricks?.length === n + 1, `Expected ${n + 1}, got ${p?.scene?.bricks?.length}`);
@@ -1031,7 +1138,7 @@ const tests = {
     log('Test: Add 2nd brick (both persist)', 'header');
     const before = parseToolPayload((await callTool('brick_get_scene')).body);
     const n = before?.scene?.bricks?.length ?? 0;
-    const { payload: p, x, y, z } = await addBrickSafe('brick_1x1', '#fe8a18');
+    const { payload: p, x, y, z } = await addBrickSafe('3005', '#fe8a18');
     log(`  Placed at (${x},${y},${z})`, 'dim');
     updateSceneDisplay(p);
     assert(p?.scene?.bricks?.length === n + 1, `Expected ${n + 1}, got ${p?.scene?.bricks?.length}`);
@@ -1119,7 +1226,7 @@ window.copyJson = function() {
 // ── Placement Mode ────────────────────────────────────────────────────────────
 
 let placementMode = false;
-let placeTypeId = 'brick_2x4';
+let placeTypeId = '3001';
 let placeColor = '#cc0000';
 let placeRotation = 0;
 let lastGridPos = null;
@@ -1141,7 +1248,8 @@ function rebuildTypeDropdown() {
   for (const typeId of Object.keys(BRICK_CATALOG)) {
     const opt = document.createElement('option');
     opt.value = typeId;
-    opt.textContent = typeId.replace('_', ' ');
+    const entry = BRICK_CATALOG[typeId];
+    opt.textContent = entry.name ? `${typeId} - ${entry.name}` : typeId;
     placeTypeSelect.appendChild(opt);
   }
   placeTypeSelect.value = (prev in BRICK_CATALOG) ? prev : placeTypeId;
@@ -1247,7 +1355,7 @@ function raycastPlacement(event) {
   // Stage 1: raycast brick meshes — any hit = stack on top
   const brickMeshes = Array.from(brickMeshMap.values());
   if (brickMeshes.length > 0) {
-    const hits = raycaster.intersectObjects(brickMeshes, false);
+    const hits = raycaster.intersectObjects(brickMeshes, true);
     if (hits.length > 0) {
       const hit = hits[0];
       let hitBrick = null;
@@ -1392,7 +1500,7 @@ function createGhostMesh(typeId, rotation) {
 function updateGhost(gridX, gridY, gridZ, valid) {
   const newKey = `${placeTypeId}_${placeRotation}`;
   if (newKey !== ghostKey || !ghostMesh) {
-    if (ghostMesh) { scene.remove(ghostMesh); ghostMesh.geometry.dispose(); ghostMesh.material.dispose(); }
+    if (ghostMesh) { scene.remove(ghostMesh); if (ghostMesh.geometry) ghostMesh.geometry.dispose(); if (ghostMesh.material) ghostMesh.material.dispose(); }
     ghostMesh = createGhostMesh(placeTypeId, placeRotation);
     ghostKey = newKey;
     if (ghostMesh) scene.add(ghostMesh);
@@ -1534,12 +1642,12 @@ const argTemplates = {
   brick_get_available: '{}',
   brick_place: JSON.stringify({
     bricks: [
-      { typeId: 'brick_2x4', x: 0, y: 0, z: 0, color: '#cc0000' },
-      { typeId: 'brick_2x4', x: 0, y: 0, z: 4, color: '#0055bf' },
+      { typeId: '3001', x: 0, y: 0, z: 0, color: '#cc0000' },
+      { typeId: '3001', x: 0, y: 0, z: 4, color: '#0055bf' },
     ],
   }, null, 2),
   brick_get_scene: '{}',
-  brick_add: JSON.stringify({ typeId: 'brick_2x4', x: 10, y: 0, z: 10, color: '#ffd700' }, null, 2),
+  brick_add: JSON.stringify({ typeId: '3001', x: 10, y: 0, z: 10, color: '#ffd700' }, null, 2),
   brick_remove: JSON.stringify({ brickId: '<paste brick id>' }, null, 2),
   brick_clear_scene: '{}',
   brick_poll_scene: JSON.stringify({ knownVersion: 0 }, null, 2),

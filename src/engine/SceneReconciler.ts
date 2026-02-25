@@ -4,7 +4,7 @@ import { getBrickType } from './BrickCatalog';
 import { createBrickMesh, applyBrickTransform, updateBrickColor } from '../three/BrickMesh';
 
 export class SceneReconciler {
-  private meshMap = new Map<string, THREE.Mesh>();
+  private meshMap = new Map<string, THREE.Object3D>();
   private parent: THREE.Group;
 
   constructor(parent: THREE.Group) {
@@ -15,10 +15,10 @@ export class SceneReconciler {
     const incoming = new Set(bricks.map((b) => b.id));
 
     // Remove deleted bricks
-    for (const [id, mesh] of this.meshMap) {
+    for (const [id, obj] of this.meshMap) {
       if (!incoming.has(id)) {
-        this.parent.remove(mesh);
-        (mesh.material as THREE.Material).dispose();
+        this.parent.remove(obj);
+        this.disposeObject(obj);
         this.meshMap.delete(id);
       }
     }
@@ -37,33 +37,58 @@ export class SceneReconciler {
         // Add new
         const bt = getBrickType(brick.typeId);
         if (!bt) continue;
-        const mesh = createBrickMesh(brick, bt);
-        this.parent.add(mesh);
-        this.meshMap.set(brick.id, mesh);
+        const obj = createBrickMesh(brick, bt);
+        this.parent.add(obj);
+        this.meshMap.set(brick.id, obj);
       }
     }
   }
 
-  getBrickMeshes(): THREE.Mesh[] {
+  /** Collect all Mesh objects for raycasting (recursive into Groups). */
+  getBrickMeshes(): THREE.Object3D[] {
     return Array.from(this.meshMap.values());
   }
 
-  getMeshById(brickId: string): THREE.Mesh | undefined {
+  getMeshById(brickId: string): THREE.Object3D | undefined {
     return this.meshMap.get(brickId);
   }
 
   setHighlight(brickId: string | null) {
-    for (const [id, mesh] of this.meshMap) {
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.emissive.setHex(id === brickId ? 0x333333 : 0x000000);
+    for (const [id, obj] of this.meshMap) {
+      const emissiveHex = id === brickId ? 0x333333 : 0x000000;
+      if (obj instanceof THREE.Mesh) {
+        const mat = obj.material as THREE.MeshStandardMaterial;
+        mat.emissive.setHex(emissiveHex);
+      } else {
+        obj.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            const mat = child.material as THREE.MeshStandardMaterial;
+            if (mat.emissive) mat.emissive.setHex(emissiveHex);
+          }
+        });
+      }
     }
   }
 
   dispose() {
-    for (const [, mesh] of this.meshMap) {
-      this.parent.remove(mesh);
-      (mesh.material as THREE.Material).dispose();
+    for (const [, obj] of this.meshMap) {
+      this.parent.remove(obj);
+      this.disposeObject(obj);
     }
     this.meshMap.clear();
+  }
+
+  private disposeObject(obj: THREE.Object3D) {
+    // Dispose materials but NOT geometry (shared via template cloning for LDraw)
+    obj.traverse((child) => {
+      if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
+        const mat = child.material;
+        if (Array.isArray(mat)) {
+          mat.forEach(m => m.dispose());
+        } else if (mat) {
+          mat.dispose();
+        }
+      }
+    });
   }
 }

@@ -351,7 +351,7 @@ Use footprints to position new bricks. Do NOT calculate positions manually — r
 - To place a brick adjacent along Z: use the previous brick's footprint.maxZ as the new brick's z
 - To stack on top: use the previous brick's footprint.topY as the new brick's y
 
-Example: you place a brick_2x4 at (10, 0, 10) with rotation "90". The response includes:
+Example: you place a 2x4 brick (typeId="3001") at (10, 0, 10) with rotation "90". The response includes:
   footprint: { minX: 10, maxX: 14, minZ: 10, maxZ: 12, topY: 3 }
 To place the next brick to the right: x=14 (footprint.maxX)
 To place a brick in front: z=12 (footprint.maxZ)
@@ -363,31 +363,31 @@ Each brick_place call places ONE brick. Build bottom-up — always place support
 
 ### Wall (4 bricks tall)
 Place first brick, then use footprint.topY for each subsequent layer:
-  brick_place(typeId="brick_1x8", x=10, y=0, z=10, color="#cc0000")
+  brick_place(typeId="3008", x=10, y=0, z=10, color="#cc0000")   ← 3008 = Brick 1x8
     → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:3}
-  brick_place(typeId="brick_1x8", x=10, y=3, z=10, color="#cc0000")  ← y=3 from topY
+  brick_place(typeId="3008", x=10, y=3, z=10, color="#cc0000")   ← y=3 from topY
     → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:6}
-  brick_place(typeId="brick_1x8", x=10, y=6, z=10, color="#cc0000")  ← y=6 from topY
-  brick_place(typeId="brick_1x8", x=10, y=9, z=10, color="#cc0000")  ← y=9 from topY
+  brick_place(typeId="3008", x=10, y=6, z=10, color="#cc0000")   ← y=6 from topY
+  brick_place(typeId="3008", x=10, y=9, z=10, color="#cc0000")   ← y=9 from topY
 
 ### Placing side by side along Z
 Use footprint.maxZ from each response for the next brick's z:
-  brick_place(typeId="brick_2x4", x=10, y=0, z=10, color="#cc0000")
+  brick_place(typeId="3001", x=10, y=0, z=10, color="#cc0000")   ← 3001 = Brick 2x4
     → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
-  brick_place(typeId="brick_2x4", x=10, y=0, z=14, color="#0055bf")  ← z=14 from maxZ
+  brick_place(typeId="3001", x=10, y=0, z=14, color="#0055bf")   ← z=14 from maxZ
     → footprint: {minX:10, maxX:12, minZ:14, maxZ:18, topY:3}
-  brick_place(typeId="brick_2x4", x=10, y=0, z=18, color="#237841")  ← z=18 from maxZ
+  brick_place(typeId="3001", x=10, y=0, z=18, color="#237841")   ← z=18 from maxZ
 
 ### Placing side by side along X
 Use footprint.maxX from each response for the next brick's x:
-  brick_place(typeId="brick_2x4", x=10, y=0, z=10, color="#cc0000")
+  brick_place(typeId="3001", x=10, y=0, z=10, color="#cc0000")   ← 3001 = Brick 2x4
     → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
-  brick_place(typeId="brick_2x4", x=12, y=0, z=10, color="#0055bf")  ← x=12 from maxX
-  brick_place(typeId="brick_2x4", x=14, y=0, z=10, color="#237841")  ← x=14 from maxX
+  brick_place(typeId="3001", x=12, y=0, z=10, color="#0055bf")   ← x=12 from maxX
+  brick_place(typeId="3001", x=14, y=0, z=10, color="#237841")   ← x=14 from maxX
 
 ### Rotation changes footprint — always read it
-  brick_2x4 at rotation "0":  footprint maxX = x+2, maxZ = z+4
-  brick_2x4 at rotation "90": footprint maxX = x+4, maxZ = z+2  (swapped!)
+  3001 (Brick 2x4) at rotation "0":  footprint maxX = x+2, maxZ = z+4
+  3001 (Brick 2x4) at rotation "90": footprint maxX = x+4, maxZ = z+2  (swapped!)
 
 ## Rules
 - Build BOTTOM-UP: y=0 first, then y=3, y=6, etc. Floating bricks are rejected.
@@ -433,7 +433,7 @@ export function createServer(): McpServer {
     name: "Brick Builder",
     version: "1.0.0",
   }, {
-    instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Do not guess brick type IDs.`,
+    instructions: `3D brick construction tool. IMPORTANT: Always call brick_read_me first to learn available brick types and their dimensions before building anything. Brick type IDs are LDraw part numbers (e.g. "3001" = Brick 2x4). Do not guess type IDs — call brick_get_available to see the full catalog.`,
   });
 
   function scenePayload(message?: string) {
@@ -484,7 +484,7 @@ export function createServer(): McpServer {
       }
       const result = {
         catalog: byCategory,
-        note: "Use exact typeId values in brick_place. Rotation swaps X and Z dimensions (e.g. brick_2x4 at rotation 90 occupies X=4, Z=2).",
+        note: "typeId values are LDraw part numbers (e.g. '3001' = Brick 2x4). Use exact typeId values in brick_place. Rotation swaps X and Z dimensions (e.g. 3001 at rotation 90 occupies X=4, Z=2).",
       };
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     },
@@ -515,7 +515,7 @@ export function createServer(): McpServer {
         x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
         y: z.number().int().min(0).describe("Y position in plate-height units (0 = baseplate, +3 per standard brick layer)"),
         z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-        rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation degrees. Swaps X/Z dimensions: e.g. brick_2x4 at 90° occupies X=4, Z=2"),
+        rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation degrees. Swaps X/Z dimensions: e.g. 3001 (Brick 2x4) at 90° occupies X=4, Z=2"),
         color: z.string().optional().default("#cc0000").describe("Hex color"),
       },
     },

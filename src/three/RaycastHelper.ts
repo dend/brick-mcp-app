@@ -21,7 +21,7 @@ export class RaycastHelper {
 
   raycastBricks(camera: THREE.Camera, meshes: THREE.Object3D[]): THREE.Intersection | null {
     this.raycaster.setFromCamera(this.pointer, camera);
-    const hits = this.raycaster.intersectObjects(meshes, false);
+    const hits = this.raycaster.intersectObjects(meshes, true);
     return hits.length > 0 ? hits[0] : null;
   }
 
@@ -41,7 +41,7 @@ export class RaycastHelper {
     let gridZ: number;
 
     // Check if we hit an existing brick
-    const brickHits = this.raycaster.intersectObjects(brickMeshes, false);
+    const brickHits = this.raycaster.intersectObjects(brickMeshes, true);
     if (brickHits.length > 0) {
       const hit = brickHits[0];
       const brickId = hit.object.userData.brickId as string;
