@@ -26,6 +26,7 @@ out/
 
 # LDraw parts library (downloaded by npm run download:ldraw)
 ldraw/
+ldraw-parts-index.json
 
 *.o
 *.so
