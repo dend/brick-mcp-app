@@ -1144,13 +1144,36 @@ function computeOccupiedCells(typeId, x, y, z, rotation) {
   return cells;
 }
 
+// Collision cells: excludes thin plate-surface columns (height=1) from
+// non-rectangular parts so brackets can nest over existing bricks.
+function computeCollisionCells(typeId, x, y, z, rotation) {
+  const cat = knownTypes[typeId];
+  if (!cat || !cat.occupancyMap) return computeOccupiedCells(typeId, x, y, z, rotation);
+
+  const colHeights = new Map();
+  for (const cell of cat.occupancyMap) {
+    const key = `${cell.dx},${cell.dz}`;
+    colHeights.set(key, Math.max(colHeights.get(key) ?? 0, cell.dy + 1));
+  }
+
+  return cat.occupancyMap
+    .filter(cell => {
+      const key = `${cell.dx},${cell.dz}`;
+      return (colHeights.get(key) ?? 0) > 1;
+    })
+    .map(cell => {
+      const r = rotateCell(cell.dx, cell.dz, cat.studsX, cat.studsZ, rotation);
+      return { x: x + r.dx, y: y + cell.dy, z: z + r.dz };
+    });
+}
+
 function checkCollisionClient(bricks, typeId, x, y, z, rotation) {
   const cat = knownTypes[typeId];
   if (!cat) return true;
-  const candidateCells = computeOccupiedCells(typeId, x, y, z, rotation);
+  const candidateCells = computeCollisionCells(typeId, x, y, z, rotation);
   const occupied = new Set();
   for (const b of bricks) {
-    const cells = computeOccupiedCells(b.typeId, b.position.x, b.position.y, b.position.z, b.rotation || 0);
+    const cells = computeCollisionCells(b.typeId, b.position.x, b.position.y, b.position.z, b.rotation || 0);
     for (const c of cells) occupied.add(`${c.x},${c.y},${c.z}`);
   }
   return candidateCells.some(c => occupied.has(`${c.x},${c.y},${c.z}`));
@@ -1200,8 +1223,47 @@ function raycastPlacement(event) {
         const hitCat = knownTypes[hitBrick.typeId];
         if (hitCat) {
           gridX = Math.floor(hit.point.x / STUD_SIZE);
-          gridY = hitBrick.position.y + hitCat.heightUnits;
           gridZ = Math.floor(hit.point.z / STUD_SIZE);
+
+          if (hitCat.occupancyMap) {
+            // For non-rectangular parts, find the height of the specific column that was hit
+            const cells = computeOccupiedCells(hitBrick.typeId, hitBrick.position.x, hitBrick.position.y, hitBrick.position.z, hitBrick.rotation || 0);
+
+            // Find cells matching the hit column
+            let matchingCells = cells.filter(c => c.x === gridX && c.z === gridZ);
+
+            // Mesh boundary fix: if hit point falls just outside the brick's
+            // occupied cells (floating-point edge), snap to the nearest column
+            if (matchingCells.length === 0) {
+              let bestDist = Infinity;
+              let bestX = gridX, bestZ = gridZ;
+              const seen = new Set();
+              for (const c of cells) {
+                const key = `${c.x},${c.z}`;
+                if (seen.has(key)) continue;
+                seen.add(key);
+                const dist = Math.abs(c.x - gridX) + Math.abs(c.z - gridZ);
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  bestX = c.x;
+                  bestZ = c.z;
+                }
+              }
+              gridX = bestX;
+              gridZ = bestZ;
+              matchingCells = cells.filter(c => c.x === gridX && c.z === gridZ);
+            }
+
+            let colTop = hitBrick.position.y; // fallback: brick base
+            for (const c of matchingCells) {
+              if (c.y + 1 > colTop) {
+                colTop = c.y + 1;
+              }
+            }
+            gridY = colTop;
+          } else {
+            gridY = hitBrick.position.y + hitCat.heightUnits;
+          }
         }
       }
     }
@@ -1228,11 +1290,14 @@ function raycastPlacement(event) {
     for (const existing of currentBricks) {
       const et = knownTypes[existing.typeId];
       if (!et) continue;
-      const cells = computeOccupiedCells(existing.typeId, existing.position.x, existing.position.y, existing.position.z, existing.rotation || 0);
+      const cells = computeCollisionCells(existing.typeId, existing.position.x, existing.position.y, existing.position.z, existing.rotation || 0);
       for (const c of cells) occupied.add(`${c.x},${c.y},${c.z}`);
     }
+    // Standard upward scan from gridY until no collision.
+    // Uses collision cells (excludes thin plate surfaces from non-rectangular
+    // parts so brackets can nest over bricks when placed beside them).
     for (let attempt = 0; attempt < 100; attempt++) {
-      const cells = computeOccupiedCells(placeTypeId, gridX, gridY, gridZ, placeRotation);
+      const cells = computeCollisionCells(placeTypeId, gridX, gridY, gridZ, placeRotation);
       if (!cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`))) break;
       gridY++;
     }

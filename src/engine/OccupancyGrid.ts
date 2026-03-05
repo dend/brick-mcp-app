@@ -120,6 +120,36 @@ export function computeOccupiedCells(brick: BrickLike, type: BrickDimensions): G
 }
 
 /**
+ * Compute collision cells for a brick — excludes "plate-surface" columns.
+ * In non-rectangular parts (brackets), columns that are only 1 plate tall
+ * (thin plate surfaces) don't block placement. This allows nesting: e.g.
+ * placing a bracket over an existing brick so the gap surrounds it.
+ * For standard rectangular parts, this is identical to computeOccupiedCells.
+ */
+export function computeCollisionCells(brick: BrickLike, type: BrickDimensions): GridCell[] {
+  if (!type.occupancyMap) return computeOccupiedCells(brick, type);
+
+  // Find per-column max height
+  const colHeights = new Map<string, number>();
+  for (const cell of type.occupancyMap) {
+    const key = `${cell.dx},${cell.dz}`;
+    colHeights.set(key, Math.max(colHeights.get(key) ?? 0, cell.dy + 1));
+  }
+
+  // Only include cells from columns taller than 1 plate (structural, not surface)
+  const { x, y, z } = brick.position;
+  return type.occupancyMap
+    .filter(cell => {
+      const key = `${cell.dx},${cell.dz}`;
+      return (colHeights.get(key) ?? 0) > 1;
+    })
+    .map(cell => {
+      const rotated = rotateCell(cell.dx, cell.dz, type.studsX, type.studsZ, brick.rotation);
+      return { x: x + rotated.dx, y: y + cell.dy, z: z + rotated.dz };
+    });
+}
+
+/**
  * Rotate a cell offset (dx, dz) according to the brick rotation.
  * dx is along studsX, dz is along studsZ (before rotation).
  */

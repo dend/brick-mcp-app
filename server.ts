@@ -12,7 +12,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { BrickDefinition } from "./src/bricks/types.js";
 import { parseLDrawPart, setLDrawDir } from "./src/ldraw/ldraw-dimensions.js";
-import { OccupancyGrid, computeOccupiedCells } from "./src/engine/OccupancyGrid.js";
+import { OccupancyGrid, computeOccupiedCells, computeCollisionCells } from "./src/engine/OccupancyGrid.js";
 
 // Initialize LDraw directory for the server-side parser
 const LDRAW_DIR = path.join(
@@ -106,6 +106,22 @@ const grid = new OccupancyGrid();
 // ── AABB helpers (used for footprint reporting and bounds checking) ──────────
 
 function getBrickAABB(brick: BrickInstance, brickType: BrickDefinition): AABB {
+  if (brickType.occupancyMap) {
+    // Derive footprint from actual occupied cells (handles non-rectangular parts)
+    const cells = computeOccupiedCells(brick as any, brickType);
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+    for (const c of cells) {
+      if (c.x < minX) minX = c.x;
+      if (c.x + 1 > maxX) maxX = c.x + 1;
+      if (c.y < minY) minY = c.y;
+      if (c.y + 1 > maxY) maxY = c.y + 1;
+      if (c.z < minZ) minZ = c.z;
+      if (c.z + 1 > maxZ) maxZ = c.z + 1;
+    }
+    return { minX, maxX, minY, maxY, minZ, maxZ };
+  }
   const { x, y, z } = brick.position;
   const isRotated = brick.rotation === 90 || brick.rotation === 270;
   const sx = isRotated ? brickType.studsZ : brickType.studsX;
@@ -123,7 +139,7 @@ function checkCollision(
   newType: BrickDefinition,
   excludeId?: string,
 ): boolean {
-  const cells = computeOccupiedCells(newBrick, newType);
+  const cells = computeCollisionCells(newBrick, newType);
   return !grid.canPlace(cells, excludeId);
 }
 
