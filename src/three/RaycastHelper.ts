@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { STUD_SIZE, PLATE_HEIGHT } from '../constants';
 import type { BrickType, BrickInstance } from '../types';
 import { getBrickType } from '../engine/BrickCatalog';
+import { computeOccupiedCells, type BrickLike } from '../engine/OccupancyGrid';
 
 export interface GridHit {
   gridX: number;
@@ -75,24 +76,31 @@ export class RaycastHelper {
       }
     }
 
-    // Auto-elevate: if the new brick's footprint overlaps any existing brick,
-    // place on top of the highest overlapping brick
+    // Auto-elevate: scan upward to find lowest collision-free Y position.
+    // This correctly handles non-rectangular parts (L-shapes, brackets, etc.)
+    // by checking actual cell overlap instead of AABB projections.
     if (brickType && bricks) {
-      const isRotated = rotation === 90 || rotation === 270;
-      const sx = isRotated ? brickType.studsZ : brickType.studsX;
-      const sz = isRotated ? brickType.studsX : brickType.studsZ;
+      // Build occupied cell set from all existing bricks
+      const occupied = new Set<string>();
       for (const existing of bricks) {
         if (excludeId && existing.id === excludeId) continue;
         const et = getBrickType(existing.typeId);
         if (!et) continue;
-        const eRot = existing.rotation === 90 || existing.rotation === 270;
-        const esx = eRot ? et.studsZ : et.studsX;
-        const esz = eRot ? et.studsX : et.studsZ;
-        if (gridX < existing.position.x + esx && gridX + sx > existing.position.x &&
-            gridZ < existing.position.z + esz && gridZ + sz > existing.position.z) {
-          const topY = existing.position.y + et.heightUnits;
-          if (topY > gridY) gridY = topY;
+        for (const c of computeOccupiedCells(existing, et)) {
+          occupied.add(`${c.x},${c.y},${c.z}`);
         }
+      }
+
+      // Scan upward from current gridY until no collision
+      const maxScan = 100; // safety limit
+      for (let attempt = 0; attempt < maxScan; attempt++) {
+        const candidate: BrickLike = {
+          id: '__raycast__', typeId: '', position: { x: gridX, y: gridY, z: gridZ }, rotation,
+        };
+        const cells = computeOccupiedCells(candidate, brickType);
+        const collides = cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`));
+        if (!collides) break;
+        gridY++;
       }
     }
 

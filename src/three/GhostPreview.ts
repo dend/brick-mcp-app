@@ -67,8 +67,10 @@ export class GhostPreview {
       const template = ldrawPartLoader.getTemplate(brickType.id)!;
       const clone = template.clone();
 
-      // Apply origin shift like LDrawPartLoader.createColoredClone does
-      clone.position.set(brickType.studsX * 0.5, 0, brickType.studsZ * 0.5);
+      // Apply origin shift — use geometry bbox for accurate Y offset
+      const bbox = template.userData.geoBbox as { minY: number; maxY: number } | undefined;
+      const h = bbox ? Math.abs(bbox.minY) : brickType.heightUnits * PLATE_HEIGHT;
+      clone.position.set(brickType.studsX * 0.5, h, brickType.studsZ * 0.5);
 
       // Apply ghost material to all meshes
       clone.traverse((child) => {

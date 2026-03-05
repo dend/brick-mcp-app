@@ -48,7 +48,14 @@ async function main() {
     // Extract — the zip contains a top-level ldraw/ folder
     console.log('Extracting...');
     const projectRoot = path.resolve(import.meta.dirname, '..');
-    execSync(`unzip -qo "${tmpZip}" -d "${projectRoot}"`, { stdio: 'inherit' });
+    if (process.platform === 'win32') {
+      execSync(
+        `powershell -NoProfile -Command "Expand-Archive -Path '${tmpZip}' -DestinationPath '${projectRoot}' -Force"`,
+        { stdio: 'inherit' },
+      );
+    } else {
+      execSync(`unzip -qo "${tmpZip}" -d "${projectRoot}"`, { stdio: 'inherit' });
+    }
 
     // Verify
     if (!fs.existsSync(MARKER_FILE)) {

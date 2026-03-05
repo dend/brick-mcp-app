@@ -12,6 +12,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { BrickDefinition } from "./src/bricks/types.js";
 import { parseLDrawPart, setLDrawDir } from "./src/ldraw/ldraw-dimensions.js";
+import { OccupancyGrid, computeOccupiedCells } from "./src/engine/OccupancyGrid.js";
 
 // Initialize LDraw directory for the server-side parser
 const LDRAW_DIR = path.join(
@@ -98,7 +99,11 @@ interface AABB {
   minZ: number; maxZ: number;
 }
 
-// ── Collision helpers ────────────────────────────────────────────────────────
+// ── Occupancy grid (authoritative collision detection) ───────────────────────
+
+const grid = new OccupancyGrid();
+
+// ── AABB helpers (used for footprint reporting and bounds checking) ──────────
 
 function getBrickAABB(brick: BrickInstance, brickType: BrickDefinition): AABB {
   const { x, y, z } = brick.position;
@@ -112,31 +117,14 @@ function getBrickAABB(brick: BrickInstance, brickType: BrickDefinition): AABB {
   };
 }
 
-function aabbOverlap(a: AABB, b: AABB): boolean {
-  return (
-    a.minX < b.maxX && a.maxX > b.minX &&
-    a.minY < b.maxY && a.maxY > b.minY &&
-    a.minZ < b.maxZ && a.maxZ > b.minZ
-  );
-}
-
 function checkCollision(
-  bricks: BrickInstance[],
+  _bricks: BrickInstance[],
   newBrick: BrickInstance,
   newType: BrickDefinition,
   excludeId?: string,
 ): boolean {
-  const newAABB = getBrickAABB(newBrick, newType);
-  for (const existing of bricks) {
-    if (excludeId && existing.id === excludeId) continue;
-    const existType = findBrickType(existing.typeId);
-    if (!existType) continue;
-    const existAABB = getBrickAABB(existing, existType);
-    if (aabbOverlap(newAABB, existAABB)) {
-      return true;
-    }
-  }
-  return false;
+  const cells = computeOccupiedCells(newBrick, newType);
+  return !grid.canPlace(cells, excludeId);
 }
 
 // ── Baseplate bounds ─────────────────────────────────────────────────────────
@@ -157,30 +145,19 @@ function checkBounds(brick: BrickInstance, brickType: BrickDefinition): string |
   return null;
 }
 
-function checkSupport(bricks: BrickInstance[], brick: BrickInstance, brickType: BrickDefinition): boolean {
-  const aabb = getBrickAABB(brick, brickType);
-  if (aabb.minY === 0) return true;
-
-  for (const existing of bricks) {
-    const et = findBrickType(existing.typeId);
-    if (!et) continue;
-    const ea = getBrickAABB(existing, et);
-    if (ea.maxY !== aabb.minY) continue;
-    // XZ overlap = support
-    if (aabb.minX < ea.maxX && aabb.maxX > ea.minX &&
-        aabb.minZ < ea.maxZ && aabb.maxZ > ea.minZ) {
-      return true;
-    }
-  }
-  return false;
+function checkSupport(_bricks: BrickInstance[], brick: BrickInstance, brickType: BrickDefinition): boolean {
+  return grid.hasSupport(brick, brickType);
 }
 
 function findUnsupported(bricks: BrickInstance[]): string[] {
+  // Rebuild a temporary grid from remaining bricks to check support
+  const tempGrid = new OccupancyGrid();
+  tempGrid.rebuild(bricks, (id) => findBrickType(id) ?? undefined);
   const unsupported: string[] = [];
   for (const brick of bricks) {
     const bt = findBrickType(brick.typeId);
     if (!bt) continue;
-    if (!checkSupport(bricks.filter(b => b.id !== brick.id), brick, bt)) {
+    if (!tempGrid.hasSupport(brick, bt)) {
       unsupported.push(brick.id);
     }
   }
@@ -405,7 +382,7 @@ export function createServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const parts: { typeId: string; name: string; studsX: number; studsZ: number; heightUnits: number }[] = [];
+      const parts: { typeId: string; name: string; studsX: number; studsZ: number; heightUnits: number; occupancyMap?: { dx: number; dy: number; dz: number }[] }[] = [];
       for (const partId of POPULAR_PART_IDS) {
         const def = parseLDrawPart(partId);
         if (def) {
@@ -415,6 +392,7 @@ export function createServer(): McpServer {
             studsX: def.studsX,
             studsZ: def.studsZ,
             heightUnits: def.heightUnits,
+            ...(def.occupancyMap ? { occupancyMap: def.occupancyMap } : {}),
           });
         }
       }
@@ -537,6 +515,33 @@ export function createServer(): McpServer {
     },
   );
 
+  // ── Tool 2c: brick_get_part_info (app-only) ────────────────────────────
+
+  registerAppTool(
+    server,
+    "brick_get_part_info",
+    {
+      title: "Get Part Info",
+      description: "Get dimensions and metadata for a part by its LDraw ID",
+      inputSchema: {
+        typeId: z.string().describe("LDraw part ID"),
+      },
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    async ({ typeId }) => {
+      const def = findBrickType(typeId);
+      if (!def) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown part: ${typeId}` }) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(def) }],
+      };
+    },
+  );
+
   // ── Tool 3: brick_render_scene (model-only, creates frame) ────────────
 
   registerAppTool(
@@ -601,6 +606,7 @@ export function createServer(): McpServer {
         };
       }
       scene.bricks.push(instance);
+      grid.place(instance.id, computeOccupiedCells(instance, brickType));
       const aabb = getBrickAABB(instance, brickType);
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
@@ -668,6 +674,7 @@ export function createServer(): McpServer {
     async () => {
       const count = scene.bricks.length;
       scene.bricks = [];
+      grid.clear();
       return sceneResult(`Cleared ${count} bricks`);
     },
   );
@@ -692,6 +699,7 @@ export function createServer(): McpServer {
         };
       }
       const removed = scene.bricks[idx];
+      grid.remove(removed.id);
       scene.bricks.splice(idx, 1);
       // Cascade: remove any bricks left unsupported
       let cascadeCount = 0;
@@ -700,6 +708,7 @@ export function createServer(): McpServer {
         changed = false;
         const unsupported = findUnsupported(scene.bricks);
         if (unsupported.length > 0) {
+          for (const uid of unsupported) grid.remove(uid);
           scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
           cascadeCount += unsupported.length;
           changed = true;
@@ -806,6 +815,7 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): collision — overlaps an existing brick` }) }], isError: true };
       }
       scene.bricks.push(instance);
+      grid.place(instance.id, computeOccupiedCells(instance, brickType));
       return sceneResult(`Added ${brickType.name} at (${x}, ${y}, ${z})`);
     },
   );
@@ -829,6 +839,7 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Brick not found: "${brickId}". It may have already been removed. Call brick_get_scene to see current bricks.` }) }], isError: true };
       }
       const removed = scene.bricks[idx];
+      grid.remove(removed.id);
       scene.bricks.splice(idx, 1);
       // Cascade: remove any bricks left unsupported
       let cascadeCount = 0;
@@ -837,6 +848,7 @@ export function createServer(): McpServer {
         changed = false;
         const unsupported = findUnsupported(scene.bricks);
         if (unsupported.length > 0) {
+          for (const uid of unsupported) grid.remove(uid);
           scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
           cascadeCount += unsupported.length;
           changed = true;
@@ -879,14 +891,19 @@ export function createServer(): McpServer {
       if (boundsError) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): ${boundsError}` }) }], isError: true };
       }
+      // Temporarily remove from grid to check support/collision at new position
+      grid.remove(brickId);
       if (!checkSupport(scene.bricks.filter(b => b.id !== brickId), moved, brickType)) {
+        grid.place(brickId, computeOccupiedCells(brick, brickType)); // restore
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): no support — must be on baseplate (Y=0) or resting on top of another brick` }) }], isError: true };
       }
       if (checkCollision(scene.bricks, moved, brickType, brickId)) {
+        grid.place(brickId, computeOccupiedCells(brick, brickType)); // restore
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): collision — overlaps an existing brick` }) }], isError: true };
       }
       const oldPos = { ...brick.position };
       brick.position = { x, y, z };
+      grid.place(brickId, computeOccupiedCells(brick, brickType));
       // Cascade: remove any bricks left unsupported by this move
       let cascadeCount = 0;
       let changed = true;
@@ -894,6 +911,7 @@ export function createServer(): McpServer {
         changed = false;
         const unsupported = findUnsupported(scene.bricks);
         if (unsupported.length > 0) {
+          for (const uid of unsupported) grid.remove(uid);
           scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
           cascadeCount += unsupported.length;
           changed = true;
@@ -934,14 +952,19 @@ export function createServer(): McpServer {
       if (boundsError) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: ${boundsError}` }) }], isError: true };
       }
+      // Temporarily remove from grid to check support/collision with new rotation
+      grid.remove(brickId);
       // Check self-support after rotation (footprint changes)
       if (!checkSupport(scene.bricks.filter(b => b.id !== brickId), rotated, brickType)) {
+        grid.place(brickId, computeOccupiedCells(brick, brickType)); // restore
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: no support after rotation — brick would float` }) }], isError: true };
       }
       if (checkCollision(scene.bricks, rotated, brickType, brickId)) {
+        grid.place(brickId, computeOccupiedCells(brick, brickType)); // restore
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: collision — overlaps an existing brick` }) }], isError: true };
       }
       brick.rotation = Number(rotation) as 0 | 90 | 180 | 270;
+      grid.place(brickId, computeOccupiedCells(brick, brickType));
       // Cascade: remove any bricks left unsupported by the footprint change
       let cascadeCount = 0;
       let changed = true;
@@ -949,6 +972,7 @@ export function createServer(): McpServer {
         changed = false;
         const unsupported = findUnsupported(scene.bricks);
         if (unsupported.length > 0) {
+          for (const uid of unsupported) grid.remove(uid);
           scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
           cascadeCount += unsupported.length;
           changed = true;
@@ -1039,6 +1063,7 @@ export function createServer(): McpServer {
         const raw: BrickInstance[] = imported.bricks;
         const sorted = [...raw].sort((a, b) => a.position.y - b.position.y);
         const valid: BrickInstance[] = [];
+        grid.clear();
         let dropped = 0;
         for (const brick of sorted) {
           const bt = findBrickType(brick.typeId);
@@ -1047,6 +1072,7 @@ export function createServer(): McpServer {
           if (!checkSupport(valid, brick, bt)) { dropped++; continue; }
           if (checkCollision(valid, brick, bt)) { dropped++; continue; }
           valid.push(brick);
+          grid.place(brick.id, computeOccupiedCells(brick, bt));
         }
         scene = { name: imported.name, bricks: valid };
         const msg = `Imported scene '${scene.name}' with ${valid.length} bricks` +

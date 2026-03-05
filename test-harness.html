@@ -191,6 +191,7 @@
           <option value="brick_clear_scene">brick_clear_scene</option>
           <option value="brick_poll_scene">brick_poll_scene</option>
           <option value="brick_export_scene">brick_export_scene</option>
+          <option value="brick_get_part_info">brick_get_part_info</option>
         </select>
         <textarea id="toolArgs" placeholder='{"typeId":"3001",...}'>{}</textarea>
         <button class="primary" onclick="callManualTool()">Call</button>
@@ -353,6 +354,10 @@ async function ensureLDrawTemplate(partId) {
     const toRemove = [];
     container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
     toRemove.forEach(obj => obj.parent?.remove(obj));
+    // Compute world-space bounding box for accurate Y positioning
+    container.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(container);
+    container.userData.geoBbox = { minY: bbox.min.y, maxY: bbox.max.y };
     ldrawTemplates.set(partId, container);
     return container;
   } catch (e) {
@@ -368,7 +373,8 @@ function createLDrawBrickMesh(brick) {
   if (!template) return null;
 
   const clone = template.clone();
-  const h = cat.heightUnits * PLATE_HEIGHT;
+  const geoBbox = template.userData.geoBbox;
+  const h = geoBbox ? Math.abs(geoBbox.minY) : cat.heightUnits * PLATE_HEIGHT;
   clone.position.set(cat.studsX * 0.5, h, cat.studsZ * 0.5);
 
   const color = new THREE.Color(brick.color);
@@ -615,6 +621,7 @@ function registerDynamicTypes(dynamicTypes) {
         studsX: def.studsX,
         studsZ: def.studsZ,
         heightUnits: def.heightUnits,
+        ...(def.occupancyMap ? { occupancyMap: def.occupancyMap } : {}),
       };
       added++;
       // Load LDraw template for the new type
@@ -720,11 +727,11 @@ window.initSession = async function() {
     try {
       const catResp = await callTool('brick_get_available');
       const catPayload = parseToolPayload(catResp.body);
-      if (catPayload?.parts) {
+      if (catPayload?.parts && catPayload.parts.length > 0) {
         let added = 0;
         for (const t of catPayload.parts) {
           if (!knownTypes[t.typeId]) {
-            knownTypes[t.typeId] = { name: t.name, studsX: t.studsX, studsZ: t.studsZ, heightUnits: t.heightUnits };
+            knownTypes[t.typeId] = { name: t.name, studsX: t.studsX, studsZ: t.studsZ, heightUnits: t.heightUnits, ...(t.occupancyMap ? { occupancyMap: t.occupancyMap } : {}) };
             added++;
           }
         }
@@ -736,6 +743,8 @@ window.initSession = async function() {
         for (const typeId of Object.keys(knownTypes)) {
           ensureLDrawTemplate(typeId);
         }
+      } else {
+        log('No brick types returned — run "npm run download:ldraw" on the server', 'warn');
       }
     } catch (e) {
       log(`Part sync failed: ${e.message}`, 'warn');
@@ -876,16 +885,17 @@ async function addBrickSafe(typeId, color, maxRetries = 10) {
     const z = Math.floor(Math.random() * (48 - def.studsZ));
 
     let topY = 0;
+    const occupied = new Set();
     for (const b of bricks) {
       const bd = knownTypes[b.typeId];
       if (!bd) continue;
-      let bsx = bd.studsX, bsz = bd.studsZ;
-      if (b.rotation === 90 || b.rotation === 270) [bsx, bsz] = [bsz, bsx];
-      if (x < b.position.x + bsx && x + def.studsX > b.position.x &&
-          z < b.position.z + bsz && z + def.studsZ > b.position.z) {
-        const bt = b.position.y + bd.heightUnits;
-        if (bt > topY) topY = bt;
-      }
+      for (const c of computeOccupiedCells(b.typeId, b.position.x, b.position.y, b.position.z, b.rotation || 0))
+        occupied.add(`${c.x},${c.y},${c.z}`);
+    }
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const cells = computeOccupiedCells(typeId, x, topY, z, 0);
+      if (!cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`))) break;
+      topY++;
     }
 
     const resp = await callTool('brick_add', { typeId, x, y: topY, z, color });
@@ -1059,7 +1069,27 @@ function rebuildTypeDropdown() {
 rebuildTypeDropdown();
 placeTypeInput.value = placeTypeId;
 placeTypeInput.addEventListener('input', (e) => { placeTypeId = e.target.value.trim(); });
-placeTypeInput.addEventListener('change', (e) => { placeTypeId = e.target.value.trim(); });
+placeTypeInput.addEventListener('change', async (e) => {
+  placeTypeId = e.target.value.trim();
+  if (!placeTypeId || !sessionId) return;
+
+  // Resolve unknown parts from server
+  if (!knownTypes[placeTypeId]) {
+    try {
+      const resp = await callTool('brick_get_part_info', { typeId: placeTypeId });
+      const def = parseToolPayload(resp.body);
+      if (def && !def.error) {
+        knownTypes[placeTypeId] = def;
+        rebuildTypeDropdown();
+        log(`Loaded part info for ${placeTypeId}: ${def.name}`, 'info');
+      }
+    } catch (err) { log(`Part info failed: ${err.message}`, 'warn'); }
+  }
+
+  // Pre-load LDraw template so ghost appears immediately
+  await ensureLDrawTemplate(placeTypeId);
+  ghostKey = ''; // force ghost rebuild on next pointer move
+});
 
 function getPlacementDef(typeId) {
   return knownTypes[typeId] || null;
@@ -1080,37 +1110,50 @@ for (const c of DEFAULT_COLORS) {
   paletteEl.appendChild(swatch);
 }
 
-// ── Client-side collision detection (simple AABB) ────────────────────────────
+// ── Cell-based collision detection (uses occupancy maps for non-rectangular parts) ──
 
-function getBrickAABB(brick) {
-  const { x, y, z } = brick.position;
-  const cat = knownTypes[brick.typeId];
-  if (!cat) return null;
-  const isRotated = brick.rotation === 90 || brick.rotation === 270;
-  const sx = isRotated ? cat.studsZ : cat.studsX;
-  const sz = isRotated ? cat.studsX : cat.studsZ;
-  return { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
+function rotateCell(dx, dz, studsX, studsZ, rotation) {
+  switch (rotation) {
+    case 90: return { dx: studsZ - 1 - dz, dz: dx };
+    case 180: return { dx: studsX - 1 - dx, dz: studsZ - 1 - dz };
+    case 270: return { dx: dz, dz: studsX - 1 - dx };
+    default: return { dx, dz };
+  }
 }
 
-function aabbOverlap(a, b) {
-  return a.minX < b.maxX && a.maxX > b.minX &&
-         a.minY < b.maxY && a.maxY > b.minY &&
-         a.minZ < b.maxZ && a.maxZ > b.minZ;
+function computeOccupiedCells(typeId, x, y, z, rotation) {
+  const cat = knownTypes[typeId];
+  if (!cat) return [];
+
+  if (cat.occupancyMap) {
+    return cat.occupancyMap.map(cell => {
+      const r = rotateCell(cell.dx, cell.dz, cat.studsX, cat.studsZ, rotation);
+      return { x: x + r.dx, y: y + cell.dy, z: z + r.dz };
+    });
+  }
+
+  // Full AABB fallback
+  const cells = [];
+  const isRotated = rotation === 90 || rotation === 270;
+  const sx = isRotated ? cat.studsZ : cat.studsX;
+  const sz = isRotated ? cat.studsX : cat.studsZ;
+  for (let dx = 0; dx < sx; dx++)
+    for (let dy = 0; dy < cat.heightUnits; dy++)
+      for (let dz = 0; dz < sz; dz++)
+        cells.push({ x: x + dx, y: y + dy, z: z + dz });
+  return cells;
 }
 
 function checkCollisionClient(bricks, typeId, x, y, z, rotation) {
   const cat = knownTypes[typeId];
   if (!cat) return true;
-  const isRotated = rotation === 90 || rotation === 270;
-  const sx = isRotated ? cat.studsZ : cat.studsX;
-  const sz = isRotated ? cat.studsX : cat.studsZ;
-  const candidateAABB = { minX: x, maxX: x + sx, minY: y, maxY: y + cat.heightUnits, minZ: z, maxZ: z + sz };
-  for (const existing of bricks) {
-    const existAABB = getBrickAABB(existing);
-    if (!existAABB) continue;
-    if (aabbOverlap(candidateAABB, existAABB)) return true;
+  const candidateCells = computeOccupiedCells(typeId, x, y, z, rotation);
+  const occupied = new Set();
+  for (const b of bricks) {
+    const cells = computeOccupiedCells(b.typeId, b.position.x, b.position.y, b.position.z, b.rotation || 0);
+    for (const c of cells) occupied.add(`${c.x},${c.y},${c.z}`);
   }
-  return false;
+  return candidateCells.some(c => occupied.has(`${c.x},${c.y},${c.z}`));
 }
 
 function isInBounds(typeId, x, z, rotation) {
@@ -1142,12 +1185,16 @@ function raycastPlacement(event) {
     const hits = raycaster.intersectObjects(brickMeshes, true);
     if (hits.length > 0) {
       const hit = hits[0];
+      // Walk up parent chain to find a mesh/group in brickMeshMap
+      // (LDraw parts are Groups containing sub-meshes)
       let hitBrick = null;
-      for (const [id, mesh] of brickMeshMap) {
-        if (mesh === hit.object) {
-          hitBrick = currentBricks.find(b => b.id === id);
-          break;
+      let obj = hit.object;
+      while (obj) {
+        if (obj.userData?.brickId) {
+          hitBrick = currentBricks.find(b => b.id === obj.userData.brickId);
+          if (hitBrick) break;
         }
+        obj = obj.parent;
       }
       if (hitBrick) {
         const hitCat = knownTypes[hitBrick.typeId];
@@ -1173,24 +1220,21 @@ function raycastPlacement(event) {
     }
   }
 
-  // Auto-elevate: find highest Y where AABB overlaps
+  // Auto-elevate: scan upward to find lowest collision-free Y position.
+  // Correctly handles non-rectangular parts by checking actual cell overlap.
   const placeCat = getPlacementDef(placeTypeId);
   if (placeCat) {
-    const isRotated = placeRotation === 90 || placeRotation === 270;
-    const sx = isRotated ? placeCat.studsZ : placeCat.studsX;
-    const sz = isRotated ? placeCat.studsX : placeCat.studsZ;
+    const occupied = new Set();
     for (const existing of currentBricks) {
       const et = knownTypes[existing.typeId];
       if (!et) continue;
-      const eRot = existing.rotation === 90 || existing.rotation === 270;
-      const esx = eRot ? et.studsZ : et.studsX;
-      const esz = eRot ? et.studsX : et.studsZ;
-      // XZ overlap check
-      if (gridX < existing.position.x + esx && gridX + sx > existing.position.x &&
-          gridZ < existing.position.z + esz && gridZ + sz > existing.position.z) {
-        const topY = existing.position.y + et.heightUnits;
-        if (topY > gridY) gridY = topY;
-      }
+      const cells = computeOccupiedCells(existing.typeId, existing.position.x, existing.position.y, existing.position.z, existing.rotation || 0);
+      for (const c of cells) occupied.add(`${c.x},${c.y},${c.z}`);
+    }
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const cells = computeOccupiedCells(placeTypeId, gridX, gridY, gridZ, placeRotation);
+      if (!cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`))) break;
+      gridY++;
     }
   }
 
@@ -1207,7 +1251,8 @@ function createGhostMesh(typeId, rotation) {
   const template = ldrawTemplates.get(typeId);
   if (template) {
     const clone = template.clone();
-    const gh = cat.heightUnits * PLATE_HEIGHT;
+    const geoBbox = template.userData.geoBbox;
+    const gh = geoBbox ? Math.abs(geoBbox.minY) : cat.heightUnits * PLATE_HEIGHT;
     clone.position.set(cat.studsX * 0.5, gh, cat.studsZ * 0.5);
 
     const ghostMat = new THREE.MeshStandardMaterial({
@@ -1376,7 +1421,7 @@ async function onPlacementPointerUp(e) {
     const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
     const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
     if (!inBounds || collision) {
-      log(`Placement blocked at (${hit.gridX}, ${hit.gridY}, ${hit.gridZ})`, 'warn');
+      log(`Placement blocked at (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}): ${!inBounds ? 'out of bounds' : 'collision'}`, 'warn');
       return;
     }
   }
@@ -1391,7 +1436,9 @@ async function onPlacementPointerUp(e) {
       rotation: String(placeRotation),
     });
     const payload = parseToolPayload(resp.body);
-    if (payload?.error) {
+    if (!payload) {
+      log(`Place failed: could not parse server response`, 'fail');
+    } else if (payload?.error) {
       log(`Server rejected: ${payload.error}`, 'fail');
     } else {
       updateSceneDisplay(payload);
@@ -1462,6 +1509,7 @@ const argTemplates = {
   brick_clear_scene: '{}',
   brick_poll_scene: JSON.stringify({ knownVersion: 0 }, null, 2),
   brick_export_scene: JSON.stringify({ format: 'summary' }, null, 2),
+  brick_get_part_info: JSON.stringify({ typeId: '3001' }, null, 2),
 };
 
 document.getElementById('toolName').addEventListener('change', (e) => {

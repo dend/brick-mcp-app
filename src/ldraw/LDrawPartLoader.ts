@@ -102,6 +102,11 @@ export class LDrawPartLoader {
       obj.parent?.remove(obj);
     }
 
+    // Compute world-space bounding box for accurate Y positioning
+    container.updateMatrixWorld(true);
+    const bbox = new THREE.Box3().setFromObject(container);
+    container.userData.geoBbox = { minY: bbox.min.y, maxY: bbox.max.y };
+
     return container;
   }
 
@@ -121,8 +126,9 @@ export class LDrawPartLoader {
 
     // Apply origin shift:
     // X/Z: LDraw parts are centered, but our system uses corner-origin (0,0 = min corner)
-    // Y: LDraw Y=0 is the top surface; shift down by brick height so bottom is at Y=0
-    const h = def.heightUnits * PLATE_HEIGHT;
+    // Y: Use geometry bbox for accurate offset (handles non-standard parts like brackets)
+    const bbox = template.userData.geoBbox as { minY: number; maxY: number } | undefined;
+    const h = bbox ? Math.abs(bbox.minY) : def.heightUnits * PLATE_HEIGHT;
     clone.position.set(def.studsX * 0.5, h, def.studsZ * 0.5);
 
     // Override materials with our color

@@ -8,6 +8,7 @@ import { RaycastHelper } from '../three/RaycastHelper';
 import { GhostPreview } from '../three/GhostPreview';
 import { checkCollisionClient, checkSupportClient } from '../engine/CollisionDetector';
 import { getBrickType } from '../engine/BrickCatalog';
+import { ldrawPartLoader } from '../ldraw/LDrawPartLoader';
 import { BASEPLATE_SIZE } from '../constants';
 
 interface UseInteractionProps {
@@ -56,6 +57,13 @@ export function useInteraction({
       ghostRef.current = null;
     };
   }, [handle]);
+
+  // Pre-load LDraw model when selected brick type changes
+  useEffect(() => {
+    if (ldrawPartLoader.isReady() && selectedBrickType?.id) {
+      ldrawPartLoader.loadPart(selectedBrickType.id);
+    }
+  }, [selectedBrickType?.id]);
 
   // Hide ghost when mode changes
   useEffect(() => {

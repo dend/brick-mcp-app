@@ -70,6 +70,16 @@ function main() {
     // Extract part ID from filename (strip .dat)
     const id = file.replace(/\.dat$/i, "");
 
+    // Filter out variations by filename pattern:
+    //   p01, pb01  = patterned/printed parts
+    //   d01        = stickered/decorated parts
+    //   c01        = formed (3D curved) stickers
+    //   -f1        = positional variants of moving parts
+    if (/[pdc]\d{2}|pb\d|pat\d|-f\d/i.test(id)) {
+      skipped++;
+      continue;
+    }
+
     // Find !CATEGORY line, otherwise derive from first word of name
     let category: string | undefined;
     for (const line of lines) {

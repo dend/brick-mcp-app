@@ -1,5 +1,6 @@
 import type { BrickInstance, BrickType, AABB } from '../types';
 import { getBrickType } from './BrickCatalog';
+import { computeOccupiedCells, type BrickLike } from './OccupancyGrid';
 
 export function getBrickAABB(brick: BrickInstance, brickType: BrickType): AABB {
   const { x, y, z } = brick.position;
@@ -13,14 +14,6 @@ export function getBrickAABB(brick: BrickInstance, brickType: BrickType): AABB {
   };
 }
 
-function aabbOverlap(a: AABB, b: AABB): boolean {
-  return (
-    a.minX < b.maxX && a.maxX > b.minX &&
-    a.minY < b.maxY && a.maxY > b.minY &&
-    a.minZ < b.maxZ && a.maxZ > b.minZ
-  );
-}
-
 export function checkSupportClient(
   bricks: BrickInstance[],
   typeId: string,
@@ -31,28 +24,25 @@ export function checkSupportClient(
 ): boolean {
   const brickType = getBrickType(typeId);
   if (!brickType) return false;
-  const candidate: BrickInstance = {
-    id: '__check__',
-    typeId,
-    position: { x, y, z },
-    rotation,
-    color: '#000000',
-  };
-  const aabb = getBrickAABB(candidate, brickType);
-  if (aabb.minY === 0) return true;
+  if (y === 0) return true;
 
+  const candidate: BrickLike = { id: '__check__', typeId, position: { x, y, z }, rotation };
+  const candidateCells = computeOccupiedCells(candidate, brickType);
+
+  // Find bottom-layer cells (minimum dy for this brick)
+  const bottomCells = candidateCells.filter(c => c.y === y);
+
+  // Build a set of all occupied cells from existing bricks
+  const occupiedSet = new Set<string>();
   for (const existing of bricks) {
     const et = getBrickType(existing.typeId);
     if (!et) continue;
-    const ea = getBrickAABB(existing, et);
-    if (ea.maxY !== aabb.minY) continue;
-    // XZ overlap check
-    if (aabb.minX < ea.maxX && aabb.maxX > ea.minX &&
-        aabb.minZ < ea.maxZ && aabb.maxZ > ea.minZ) {
-      return true;
-    }
+    const cells = computeOccupiedCells(existing, et);
+    for (const c of cells) occupiedSet.add(`${c.x},${c.y},${c.z}`);
   }
-  return false;
+
+  // Check if any cell directly below the bottom layer is occupied
+  return bottomCells.some(c => occupiedSet.has(`${c.x},${c.y - 1},${c.z}`));
 }
 
 export function checkCollisionClient(
@@ -67,23 +57,18 @@ export function checkCollisionClient(
   const brickType = getBrickType(typeId);
   if (!brickType) return true;
 
-  const candidate: BrickInstance = {
-    id: '__ghost__',
-    typeId,
-    position: { x, y, z },
-    rotation,
-    color: '#000000',
-  };
-  const candidateAABB = getBrickAABB(candidate, brickType);
+  const candidate: BrickLike = { id: '__ghost__', typeId, position: { x, y, z }, rotation };
+  const candidateCells = computeOccupiedCells(candidate, brickType);
 
+  // Build a set of all occupied cells from existing bricks
+  const occupiedSet = new Set<string>();
   for (const existing of bricks) {
     if (excludeId && existing.id === excludeId) continue;
     const existType = getBrickType(existing.typeId);
     if (!existType) continue;
-    const existAABB = getBrickAABB(existing, existType);
-    if (aabbOverlap(candidateAABB, existAABB)) {
-      return true;
-    }
+    const cells = computeOccupiedCells(existing, existType);
+    for (const c of cells) occupiedSet.add(`${c.x},${c.y},${c.z}`);
   }
-  return false;
+
+  return candidateCells.some(c => occupiedSet.has(`${c.x},${c.y},${c.z}`));
 }
