@@ -129,7 +129,7 @@ export class RaycastHelper {
         if (excludeId && existing.id === excludeId) continue;
         const et = getBrickType(existing.typeId);
         if (!et) continue;
-        for (const c of computeCollisionCells(existing, et)) {
+        for (const c of computeOccupiedCells(existing as BrickLike, et)) {
           occupied.add(`${c.x},${c.y},${c.z}`);
         }
       }
@@ -139,7 +139,12 @@ export class RaycastHelper {
         const candidate: BrickLike = {
           id: '__raycast__', typeId: '', position: { x: gridX, y: gridY, z: gridZ }, rotation,
         };
-        const cells = computeCollisionCells(candidate, brickType);
+        // Non-rectangular parts (occupancyMap): skip auto-elevation entirely,
+        // server validates placement. This avoids voxelization artifacts causing
+        // false collisions with adjacent bricks.
+        const cells = brickType.occupancyMap
+          ? []
+          : computeCollisionCells(candidate, brickType);
         const collides = cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`));
         if (!collides) break;
         gridY++;

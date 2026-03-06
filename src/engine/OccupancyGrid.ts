@@ -129,34 +129,16 @@ export function computeOccupiedCells(brick: BrickLike, type: BrickDimensions): G
 export function computeCollisionCells(brick: BrickLike, type: BrickDimensions): GridCell[] {
   if (!type.occupancyMap) return computeOccupiedCells(brick, type);
 
-  // Find per-column max height
+  // Find per-column max height to filter thin plate-surface columns (h<=1)
   const colHeights = new Map<string, number>();
   for (const cell of type.occupancyMap) {
     const key = `${cell.dx},${cell.dz}`;
     colHeights.set(key, Math.max(colHeights.get(key) ?? 0, cell.dy + 1));
   }
 
-  // Exclude non-structural columns using neighbor-connectivity:
-  // A column is structural only if height > 1 AND it has at least one
-  // tall (h>1) neighbor on EACH horizontal axis (dx AND dz).
-  // This correctly filters thin walls (bracket wall has no tall dx-neighbor)
-  // while keeping solid 2x2+ regions (tall neighbors on both axes).
-  function isTall(dx: number, dz: number): boolean {
-    return (colHeights.get(`${dx},${dz}`) ?? 0) > 1;
-  }
-
-  const structuralCols = new Set<string>();
-  for (const [key, h] of colHeights) {
-    if (h <= 1) continue;
-    const [dx, dz] = key.split(',').map(Number);
-    const hasTallDxNeighbor = isTall(dx - 1, dz) || isTall(dx + 1, dz);
-    const hasTallDzNeighbor = isTall(dx, dz - 1) || isTall(dx, dz + 1);
-    if (hasTallDxNeighbor && hasTallDzNeighbor) structuralCols.add(key);
-  }
-
   const { x, y, z } = brick.position;
   return type.occupancyMap
-    .filter(cell => structuralCols.has(`${cell.dx},${cell.dz}`))
+    .filter(cell => (colHeights.get(`${cell.dx},${cell.dz}`) ?? 0) > 1)
     .map(cell => {
       const rotated = rotateCell(cell.dx, cell.dz, type.studsX, type.studsZ, brick.rotation);
       return { x: x + rotated.dx, y: y + cell.dy, z: z + rotated.dz };
