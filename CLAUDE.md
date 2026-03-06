@@ -23,6 +23,7 @@ Project specifications live in `specs/`. Read these before making architectural 
 
 ```bash
 npm install          # Install dependencies
+npm run download:ldraw # One-time: download LDraw parts library
 npm run build        # Build client + server
 npm run serve        # Start server (dev mode with tsx)
 npm run dev          # Watch + serve concurrently

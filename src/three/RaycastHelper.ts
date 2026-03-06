@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { STUD_SIZE, PLATE_HEIGHT } from '../constants';
 import type { BrickType, BrickInstance } from '../types';
 import { getBrickType } from '../engine/BrickCatalog';
+import { computeOccupiedCells, type BrickLike } from '../engine/OccupancyGrid';
 
 export interface GridHit {
   gridX: number;
@@ -21,7 +22,7 @@ export class RaycastHelper {
 
   raycastBricks(camera: THREE.Camera, meshes: THREE.Object3D[]): THREE.Intersection | null {
     this.raycaster.setFromCamera(this.pointer, camera);
-    const hits = this.raycaster.intersectObjects(meshes, false);
+    const hits = this.raycaster.intersectObjects(meshes, true);
     return hits.length > 0 ? hits[0] : null;
   }
 
@@ -41,17 +42,31 @@ export class RaycastHelper {
     let gridZ: number;
 
     // Check if we hit an existing brick
-    const brickHits = this.raycaster.intersectObjects(brickMeshes, false);
+    const brickHits = this.raycaster.intersectObjects(brickMeshes, true);
     if (brickHits.length > 0) {
       const hit = brickHits[0];
       const brickId = hit.object.userData.brickId as string;
       const hitBrick = bricks?.find(b => b.id === brickId);
       if (hitBrick) {
+        // Detect side-face hits: skip stacking when ray hits the side of a brick
+        const worldNormal = hit.face?.normal?.clone();
+        if (worldNormal) worldNormal.transformDirection(hit.object.matrixWorld);
+        const isSideHit = worldNormal && Math.abs(worldNormal.y) < 0.5;
+
         const bt = getBrickType(hitBrick.typeId);
-        if (bt) {
+        if (bt && !isSideHit) {
           gridX = Math.floor(hit.point.x / STUD_SIZE);
-          gridY = hitBrick.position.y + bt.heightUnits;
           gridZ = Math.floor(hit.point.z / STUD_SIZE);
+
+          if (bt.occupancyMap) {
+            // Sparse parts have gaps the ghost might nest INTO, not just stack on.
+            // Starting at the brick's base lets auto-elevate find the lowest legal
+            // spot — a nest slot beside a short column, or stack-on-top for a tall
+            // one. colTop would start ABOVE the gap and auto-elevate only climbs.
+            gridY = hitBrick.position.y;
+          } else {
+            gridY = hitBrick.position.y + bt.heightUnits;
+          }
         } else {
           gridX = Math.floor(hit.point.x / STUD_SIZE);
           gridY = Math.round(hit.point.y / PLATE_HEIGHT);
@@ -75,24 +90,27 @@ export class RaycastHelper {
       }
     }
 
-    // Auto-elevate: if the new brick's footprint overlaps any existing brick,
-    // place on top of the highest overlapping brick
+    // Auto-elevate: scan upward to find lowest collision-free Y position.
     if (brickType && bricks) {
-      const isRotated = rotation === 90 || rotation === 270;
-      const sx = isRotated ? brickType.studsZ : brickType.studsX;
-      const sz = isRotated ? brickType.studsX : brickType.studsZ;
+      const occupied = new Set<string>();
       for (const existing of bricks) {
         if (excludeId && existing.id === excludeId) continue;
         const et = getBrickType(existing.typeId);
         if (!et) continue;
-        const eRot = existing.rotation === 90 || existing.rotation === 270;
-        const esx = eRot ? et.studsZ : et.studsX;
-        const esz = eRot ? et.studsX : et.studsZ;
-        if (gridX < existing.position.x + esx && gridX + sx > existing.position.x &&
-            gridZ < existing.position.z + esz && gridZ + sz > existing.position.z) {
-          const topY = existing.position.y + et.heightUnits;
-          if (topY > gridY) gridY = topY;
+        for (const c of computeOccupiedCells(existing as BrickLike, et)) {
+          occupied.add(`${c.x},${c.y},${c.z}`);
         }
+      }
+
+      const maxScan = 100;
+      for (let attempt = 0; attempt < maxScan; attempt++) {
+        const candidate: BrickLike = {
+          id: '__raycast__', typeId: '', position: { x: gridX, y: gridY, z: gridZ }, rotation,
+        };
+        const cells = computeOccupiedCells(candidate, brickType);
+        const collides = cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`));
+        if (!collides) break;
+        gridY++;
       }
     }
 

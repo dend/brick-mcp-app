@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import cors from "cors";
 import crypto from "node:crypto";
+import express from "express";
 import fs from "node:fs";
 import path from "node:path";
 import type { Request, Response } from "express";
@@ -38,6 +39,16 @@ export async function startStreamableHTTPServer(
       res.status(404).send("test-harness.html not found");
     }
   });
+
+  // Serve LDraw library files for test harness
+  const ldrawDir = path.resolve(
+    import.meta.dirname,
+    import.meta.filename.endsWith(".ts") ? "." : "..",
+    "ldraw",
+  );
+  if (fs.existsSync(ldrawDir)) {
+    app.use("/ldraw", express.static(ldrawDir));
+  }
 
   app.all("/mcp", async (req: Request, res: Response) => {
     // Prevent reverse-proxy buffering (Cloudflare Tunnels, Nginx, etc.)

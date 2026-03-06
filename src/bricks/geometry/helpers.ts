@@ -16,10 +16,6 @@ export function createHollowStuds(
   studsX: number,
   studsZ: number,
   h: number,
-  opts?: {
-    skipNotch?: { fromX: number; fromZ: number };  // skip studs where sx >= fromX && sz >= fromZ
-    onlyRow?: number;      // only place studs on this Z row index
-  },
 ): THREE.BufferGeometry[] {
   const parts: THREE.BufferGeometry[] = [];
 
@@ -38,8 +34,6 @@ export function createHollowStuds(
 
   for (let sx = 0; sx < studsX; sx++) {
     for (let sz = 0; sz < studsZ; sz++) {
-      if (opts?.skipNotch && sx >= opts.skipNotch.fromX && sz >= opts.skipNotch.fromZ) continue;
-      if (opts?.onlyRow !== undefined && sz !== opts.onlyRow) continue;
       const stud = baseStudGeo.clone();
       stud.translate(
         (sx + 0.5) * STUD_SIZE,
@@ -161,30 +155,4 @@ export function createRibs(
   }
 
   return parts;
-}
-
-/**
- * Create a rectangular wall shape with circular pin holes (for technic bricks).
- * Shape is in local 2D coordinates centered at origin.
- */
-export function createTechnicWallShape(
-  wallWidth: number,
-  holePositions: number[],
-  wallBot: number,
-  wallTop: number,
-  holeY: number,
-  pinR: number,
-): THREE.Shape {
-  const shape = new THREE.Shape();
-  shape.moveTo(-wallWidth / 2, wallBot);
-  shape.lineTo(wallWidth / 2, wallBot);
-  shape.lineTo(wallWidth / 2, wallTop);
-  shape.lineTo(-wallWidth / 2, wallTop);
-  shape.lineTo(-wallWidth / 2, wallBot);
-  for (const hp of holePositions) {
-    const hole = new THREE.Path();
-    hole.absarc(hp, holeY, pinR, 0, Math.PI * 2, true);
-    shape.holes.push(hole);
-  }
-  return shape;
 }

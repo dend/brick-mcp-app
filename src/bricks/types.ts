@@ -1,15 +1,14 @@
-export interface BlockoutZone {
-  minX: number; maxX: number;  // local stud coordinates
-  minZ: number; maxZ: number;  // local stud coordinates
-  height: number;              // heightUnits above the brick's top
-}
-
 export interface BrickDefinition {
   id: string;
   name: string;
-  category: 'brick' | 'plate' | 'slope' | 'technic' | 'corner';
   studsX: number;
   studsZ: number;
   heightUnits: number;
-  blockout?: BlockoutZone[];
+  /**
+   * Sparse occupancy map — relative cell offsets {dx, dy, dz} that the part
+   * actually occupies within its studsX × heightUnits × studsZ bounding box.
+   * When absent, the full rectangular AABB is assumed (standard bricks).
+   * Coordinates are in scene space (dx along studsX, dz along studsZ, dy along height).
+   */
+  occupancyMap?: { dx: number; dy: number; dz: number }[];
 }
