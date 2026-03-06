@@ -176,7 +176,7 @@ function rotateCell(
 /**
  * Compute just the bottom-layer cells (for support checking).
  */
-function computeBottomCells(brick: BrickLike, type: BrickDimensions): GridCell[] {
+export function computeBottomCells(brick: BrickLike, type: BrickDimensions): GridCell[] {
   if (type.occupancyMap) {
     // Filter to cells at dy=0 (bottom layer of the part)
     const { x, y, z } = brick.position;

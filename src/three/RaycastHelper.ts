@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { STUD_SIZE, PLATE_HEIGHT } from '../constants';
 import type { BrickType, BrickInstance } from '../types';
 import { getBrickType } from '../engine/BrickCatalog';
-import { computeOccupiedCells, computeCollisionCells, type BrickLike } from '../engine/OccupancyGrid';
+import { computeOccupiedCells, computeCollisionCells, computeBottomCells, type BrickLike } from '../engine/OccupancyGrid';
 
 export interface GridHit {
   gridX: number;
@@ -139,11 +139,11 @@ export class RaycastHelper {
         const candidate: BrickLike = {
           id: '__raycast__', typeId: '', position: { x: gridX, y: gridY, z: gridZ }, rotation,
         };
-        // Non-rectangular parts (occupancyMap): skip auto-elevation entirely,
-        // server validates placement. This avoids voxelization artifacts causing
-        // false collisions with adjacent bricks.
+        // Non-rectangular parts: use only bottom-layer cells (dy=0) for auto-elevation.
+        // This avoids wall voxelization artifacts (dy>0) causing false collisions
+        // while still detecting real overlap at the base footprint.
         const cells = brickType.occupancyMap
-          ? []
+          ? computeBottomCells(candidate, brickType)
           : computeCollisionCells(candidate, brickType);
         const collides = cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`));
         if (!collides) break;

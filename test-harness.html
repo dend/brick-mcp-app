@@ -1164,6 +1164,45 @@ function computeCollisionCells(typeId, x, y, z, rotation) {
     });
 }
 
+// Bottom-layer cells (dy=0) for auto-elevation of non-rectangular parts.
+// Avoids wall voxelization artifacts while detecting real base overlap.
+function computeBottomCells(typeId, x, y, z, rotation) {
+  const cat = knownTypes[typeId];
+  if (!cat) return [];
+
+  if (cat.occupancyMap) {
+    return cat.occupancyMap
+      .filter(cell => cell.dy === 0)
+      .map(cell => {
+        const r = rotateCell(cell.dx, cell.dz, cat.studsX, cat.studsZ, rotation);
+        return { x: x + r.dx, y, z: z + r.dz };
+      });
+  }
+
+  // Full AABB bottom layer
+  const cells = [];
+  const isRotated = rotation === 90 || rotation === 270;
+  const sx = isRotated ? cat.studsZ : cat.studsX;
+  const sz = isRotated ? cat.studsX : cat.studsZ;
+  for (let dx = 0; dx < sx; dx++)
+    for (let dz = 0; dz < sz; dz++)
+      cells.push({ x: x + dx, y, z: z + dz });
+  return cells;
+}
+
+// Support check: brick at Y=0 is always supported; at Y>0 needs at least
+// one bottom cell with an occupied cell directly below it.
+function checkSupportClient(bricks, typeId, x, y, z, rotation) {
+  if (y === 0) return true;
+  const occupied = new Set();
+  for (const b of bricks) {
+    const cells = computeOccupiedCells(b.typeId, b.position.x, b.position.y, b.position.z, b.rotation || 0);
+    for (const c of cells) occupied.add(`${c.x},${c.y},${c.z}`);
+  }
+  const bottomCells = computeBottomCells(typeId, x, y, z, rotation);
+  return bottomCells.some(c => occupied.has(`${c.x},${c.y - 1},${c.z}`));
+}
+
 function checkCollisionClient(bricks, typeId, x, y, z, rotation) {
   const cat = knownTypes[typeId];
   if (!cat) return true;
@@ -1296,10 +1335,10 @@ function raycastPlacement(event) {
       for (const c of cells) occupied.add(`${c.x},${c.y},${c.z}`);
     }
     // Standard upward scan from gridY until no collision.
-    // Non-rectangular parts (occupancyMap): skip auto-elevation, server validates.
+    // Non-rectangular parts: use bottom-layer cells (dy=0) to avoid wall artifacts.
     for (let attempt = 0; attempt < 100; attempt++) {
       const cells = placeCat.occupancyMap
-        ? []
+        ? computeBottomCells(placeTypeId, gridX, gridY, gridZ, placeRotation)
         : computeCollisionCells(placeTypeId, gridX, gridY, gridZ, placeRotation);
       if (!cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`))) break;
       gridY++;
@@ -1455,7 +1494,8 @@ function onPlacementPointerMove(e) {
   if (known) {
     const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
     const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
-    const valid = inBounds && !collision;
+    const supported = checkSupportClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
+    const valid = inBounds && !collision && supported;
     updateGhost(hit.gridX, hit.gridY, hit.gridZ, valid);
     cursorOverlay.style.display = 'block';
     cursorOverlay.className = 'cursor-overlay ' + (valid ? 'valid' : 'blocked');
@@ -1488,8 +1528,9 @@ async function onPlacementPointerUp(e) {
   if (known) {
     const inBounds = isInBounds(placeTypeId, hit.gridX, hit.gridZ, placeRotation);
     const collision = checkCollisionClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
-    if (!inBounds || collision) {
-      log(`Placement blocked at (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}): ${!inBounds ? 'out of bounds' : 'collision'}`, 'warn');
+    const supported = checkSupportClient(currentBricks, placeTypeId, hit.gridX, hit.gridY, hit.gridZ, placeRotation);
+    if (!inBounds || collision || !supported) {
+      log(`Placement blocked at (${hit.gridX}, ${hit.gridY}, ${hit.gridZ}): ${!inBounds ? 'out of bounds' : collision ? 'collision' : 'unsupported'}`, 'warn');
       return;
     }
   }
