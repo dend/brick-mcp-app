@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { STUD_SIZE, PLATE_HEIGHT } from '../constants';
 import type { BrickType, BrickInstance } from '../types';
 import { getBrickType } from '../engine/BrickCatalog';
-import { computeOccupiedCells, computeCollisionCells, computeBottomCells, type BrickLike } from '../engine/OccupancyGrid';
+import { computeOccupiedCells, type BrickLike } from '../engine/OccupancyGrid';
 
 export interface GridHit {
   gridX: number;
@@ -121,8 +121,6 @@ export class RaycastHelper {
     }
 
     // Auto-elevate: scan upward to find lowest collision-free Y position.
-    // Uses collision cells (excludes thin plate surfaces from non-rectangular
-    // parts so brackets can nest over bricks when placed beside them).
     if (brickType && bricks) {
       const occupied = new Set<string>();
       for (const existing of bricks) {
@@ -139,12 +137,7 @@ export class RaycastHelper {
         const candidate: BrickLike = {
           id: '__raycast__', typeId: '', position: { x: gridX, y: gridY, z: gridZ }, rotation,
         };
-        // Non-rectangular parts: use only bottom-layer cells (dy=0) for auto-elevation.
-        // This avoids wall voxelization artifacts (dy>0) causing false collisions
-        // while still detecting real overlap at the base footprint.
-        const cells = brickType.occupancyMap
-          ? computeBottomCells(candidate, brickType)
-          : computeCollisionCells(candidate, brickType);
+        const cells = computeOccupiedCells(candidate, brickType);
         const collides = cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`));
         if (!collides) break;
         gridY++;

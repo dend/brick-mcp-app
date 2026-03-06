@@ -11,36 +11,92 @@ import { PLATE_HEIGHT } from '../constants';
  * - Y axis is inverted (-Y is up in LDraw)
  *
  * We scale by 1/20 = 0.05 and negate Y to convert to our stud-based coordinate system.
+ *
+ * File loading: the MCP App iframe inside Claude has no HTTP origin and CSP blocks
+ * fetch() of blob:/data: URLs, so three's FileLoader can't be used at all. Instead
+ * we pull .dat text through the MCP tool channel (brick_get_ldraw_files returns a
+ * part + every transitive subfile) and hand the strings straight to LDrawLoader:
+ *   - LDrawParsedCache.setData(path, text) pre-seeds the internal dep cache; when
+ *     processIntoMesh later recurses into a subfile, ensureDataLoaded() finds it
+ *     already present and skips the fetchData() network path entirely.
+ *   - loader.fileMap maps the as-written subfile reference (e.g. "stud.dat",
+ *     "s/79180s01.dat") to the canonical key we used with setData.
+ *   - loader.parse(text) is the top-level entry — takes a string, no URL.
+ * No fetch() call is ever made, so CSP never fires.
  */
 const LDRAW_SCALE = 0.05;
 
+// LDrawLoader's internals aren't in its .d.ts; these are the bits we reach into.
+interface LDrawParseCache { setData(fileName: string, text: string): void }
+interface LDrawLoaderInternals {
+  fileMap: Record<string, string>;
+  partsCache: { parseCache: LDrawParseCache };
+}
+
+export type LDrawFileFetcher = (partId: string) => Promise<Record<string, string> | null>;
+
 export class LDrawPartLoader {
   private cache = new Map<string, THREE.Group>();
+  private inflight = new Map<string, Promise<THREE.Group | null>>();
   private loader: LDrawLoader;
-  private libraryPath = '/ldraw/';
+  private seeded = new Set<string>(); // canonical paths already handed to setData
+  private fetcher: LDrawFileFetcher | null = null;
+  private chain: Promise<unknown> = Promise.resolve();
   private _ready = false;
 
   constructor() {
-    this.loader = new LDrawLoader(new THREE.LoadingManager());
+    this.loader = new LDrawLoader();
     this.loader.setConditionalLineMaterial(LDrawConditionalLineMaterial);
     this.loader.smoothNormals = true;
   }
 
   /**
-   * Initialize the loader with an HTTP library path.
-   * Must be called before getTemplate/createColoredClone.
+   * Hand every dep's text to LDrawLoader's parse cache and wire the
+   * as-written → canonical key mapping so subfile recursion finds them.
+   * LDrawLoader.js:915 reads fileMap[ref] before searching; :1145 skips
+   * fetchData when the key is already in _cache.
+   *
+   * Two passes because setData() synchronously runs parse(), which reads
+   * fileMap for every line-1 reference — so fileMap must be fully populated
+   * before ANY setData runs, not after each one.
    */
-  async init(libraryPath = '/ldraw/'): Promise<void> {
-    this.libraryPath = libraryPath;
-    this.loader.setPartsLibraryPath(libraryPath);
-    this._ready = true;
+  private ingestFiles(files: Record<string, string>): void {
+    const internals = this.loader as unknown as LDrawLoaderInternals;
+    const parseCache = internals.partsCache.parseCache;
+    const fileMap = internals.fileMap;
 
-    // Preload materials from LDConfig.ldr (non-critical — default colors work fine)
-    try {
-      await this.loader.preloadMaterials(`${libraryPath}LDConfig.ldr`);
-    } catch (e) {
-      console.warn('LDrawPartLoader: Could not preload LDConfig.ldr, using default colors', e);
+    const fresh: [string, string][] = [];
+    for (const [relPath, content] of Object.entries(files)) {
+      const canonical = relPath.replace(/\\/g, '/');
+      if (this.seeded.has(canonical)) continue;
+      this.seeded.add(canonical);
+      fresh.push([canonical, content]);
+
+      // Map every form the .dat source might reference this file by.
+      // Line-1 parser at LDrawLoader.js:915 does `replace(/\\/g, '/')` then
+      // checks fileMap, so we index both the bare basename and the path
+      // without its top-level dir (parts/s/foo → s/foo, p/48/foo → 48/foo).
+      const base = canonical.split('/').pop()!;
+      fileMap[base] = canonical;
+      fileMap[canonical] = canonical;
+      const slash = canonical.indexOf('/');
+      if (slash !== -1) {
+        fileMap[canonical.slice(slash + 1)] = canonical;
+      }
     }
+
+    for (const [canonical, content] of fresh) {
+      parseCache.setData(canonical, content);
+    }
+  }
+
+  /**
+   * Provide the function that fetches .dat file bundles from the server.
+   * Call this before loadPart().
+   */
+  init(fetcher: LDrawFileFetcher): void {
+    this.fetcher = fetcher;
+    this._ready = true;
   }
 
   isReady(): boolean {
@@ -51,13 +107,42 @@ export class LDrawPartLoader {
    * Load and cache an LDraw part template.
    * Returns null if the part can't be loaded.
    */
-  async loadPart(partId: string): Promise<THREE.Group | null> {
-    if (this.cache.has(partId)) {
-      return this.cache.get(partId)!;
-    }
+  loadPart(partId: string): Promise<THREE.Group | null> {
+    const cached = this.cache.get(partId);
+    if (cached) return Promise.resolve(cached);
+
+    const inflight = this.inflight.get(partId);
+    if (inflight) return inflight;
+
+    // Serialize fetch→ingest→parse so fileMap and parseCache aren't observed
+    // mid-population by a concurrent part's parse. setData() runs parse()
+    // synchronously, so once this._doLoad settles the shared state is clean.
+    const task = this.chain.then(() => this._doLoad(partId));
+    this.chain = task.catch(() => {});
+    this.inflight.set(partId, task);
+    task.finally(() => this.inflight.delete(partId));
+    return task;
+  }
+
+  private async _doLoad(partId: string): Promise<THREE.Group | null> {
+    if (this.cache.has(partId)) return this.cache.get(partId)!;
+    if (!this.fetcher) return null;
+
+    const partKey = `parts/${partId}.dat`;
+
+    const files = await this.fetcher(partId);
+    if (!files || !files[partKey]) return null;
+    this.ingestFiles(files);
 
     try {
-      const group = await this.loader.loadAsync(`${this.libraryPath}parts/${partId}.dat`) as THREE.Group;
+      // loader.parse() takes raw text — no URL, no FileLoader, no fetch.
+      // All subfile deps were seeded via setData above, so processIntoMesh
+      // finds them in-cache and never calls fetchData().
+      // LDConfig color codes are irrelevant: createColoredClone replaces
+      // every material with the brick's picked color anyway.
+      const group = await new Promise<THREE.Group>((resolve, reject) => {
+        this.loader.parse(files[partKey], resolve, reject);
+      });
       const template = this.prepareTemplate(group, partId);
       this.cache.set(partId, template);
       return template;
@@ -102,10 +187,14 @@ export class LDrawPartLoader {
       obj.parent?.remove(obj);
     }
 
-    // Compute world-space bounding box for accurate Y positioning
+    // Compute world-space bounding box for accurate corner-origin positioning.
+    // X/Z are needed because LDraw geometry is not always centered at its origin
+    // (e.g. 6084 has Z∈[-30,42], center=+6) so studs*0.5 would misalign the mesh.
     container.updateMatrixWorld(true);
     const bbox = new THREE.Box3().setFromObject(container);
-    container.userData.geoBbox = { minY: bbox.min.y, maxY: bbox.max.y };
+    container.userData.geoBbox = {
+      minX: bbox.min.x, minY: bbox.min.y, minZ: bbox.min.z, maxY: bbox.max.y,
+    };
 
     return container;
   }
@@ -124,12 +213,14 @@ export class LDrawPartLoader {
 
     const clone = template.clone();
 
-    // Apply origin shift:
-    // X/Z: LDraw parts are centered, but our system uses corner-origin (0,0 = min corner)
-    // Y: Use geometry bbox for accurate offset (handles non-standard parts like brackets)
-    const bbox = template.userData.geoBbox as { minY: number; maxY: number } | undefined;
-    const h = bbox ? Math.abs(bbox.minY) : def.heightUnits * PLATE_HEIGHT;
-    clone.position.set(def.studsX * 0.5, h, def.studsZ * 0.5);
+    // Shift mesh so its min corner lands at local (0,0,0). applyBrickTransform
+    // then places that corner at the grid cell's world position.
+    const bbox = template.userData.geoBbox as { minX: number; minY: number; minZ: number; maxY: number } | undefined;
+    if (bbox) {
+      clone.position.set(-bbox.minX, -bbox.minY, -bbox.minZ);
+    } else {
+      clone.position.set(def.studsX * 0.5, def.heightUnits * PLATE_HEIGHT, def.studsZ * 0.5);
+    }
 
     // Override materials with our color
     const threeColor = new THREE.Color(color);

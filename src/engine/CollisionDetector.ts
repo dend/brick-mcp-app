@@ -21,6 +21,7 @@ export function checkSupportClient(
   y: number,
   z: number,
   rotation: 0 | 90 | 180 | 270,
+  excludeId?: string,
 ): boolean {
   const brickType = getBrickType(typeId);
   if (!brickType) return false;
@@ -35,6 +36,7 @@ export function checkSupportClient(
   // Build a set of all occupied cells from existing bricks
   const occupiedSet = new Set<string>();
   for (const existing of bricks) {
+    if (excludeId && existing.id === excludeId) continue;
     const et = getBrickType(existing.typeId);
     if (!et) continue;
     const cells = computeOccupiedCells(existing, et);

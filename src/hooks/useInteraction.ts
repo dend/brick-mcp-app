@@ -150,7 +150,7 @@ export function useInteraction({
         if (hit && ghostRef.current) {
           const valid =
             isInBounds(hit.gridX, hit.gridZ, bt, dragBrick.rotation) &&
-            checkSupportClient(bricks, dragBrick.typeId, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation) &&
+            checkSupportClient(bricks, dragBrick.typeId, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation, dragBrick.id) &&
             !checkCollisionClient(bricks, dragBrick.typeId, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation, dragBrick.id);
           ghostRef.current.show(bt, hit.gridX, hit.gridY, hit.gridZ, dragBrick.rotation, valid);
           lastGridRef.current = { x: hit.gridX, y: hit.gridY, z: hit.gridZ };
@@ -232,7 +232,7 @@ export function useInteraction({
           if (brick) {
             const bt = getBrickType(brick.typeId);
             if (bt && isInBounds(x, z, bt, brick.rotation) &&
-              checkSupportClient(bricks, brick.typeId, x, y, z, brick.rotation) &&
+              checkSupportClient(bricks, brick.typeId, x, y, z, brick.rotation, drag.brickId) &&
               !checkCollisionClient(bricks, brick.typeId, x, y, z, brick.rotation, drag.brickId)) {
               callTool('brick_move', { brickId: drag.brickId, x, y, z });
             }

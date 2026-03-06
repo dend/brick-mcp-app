@@ -120,29 +120,12 @@ export function computeOccupiedCells(brick: BrickLike, type: BrickDimensions): G
 }
 
 /**
- * Compute collision cells for a brick — excludes "plate-surface" columns.
- * In non-rectangular parts (brackets), columns that are only 1 plate tall
- * (thin plate surfaces) don't block placement. This allows nesting: e.g.
- * placing a bracket over an existing brick so the gap surrounds it.
- * For standard rectangular parts, this is identical to computeOccupiedCells.
+ * Compute collision cells for a brick. Identical to computeOccupiedCells —
+ * the sparse occupancyMap already omits gap cells, so no additional filtering
+ * is needed for non-rectangular parts to nest correctly.
  */
 export function computeCollisionCells(brick: BrickLike, type: BrickDimensions): GridCell[] {
-  if (!type.occupancyMap) return computeOccupiedCells(brick, type);
-
-  // Find per-column max height to filter thin plate-surface columns (h<=1)
-  const colHeights = new Map<string, number>();
-  for (const cell of type.occupancyMap) {
-    const key = `${cell.dx},${cell.dz}`;
-    colHeights.set(key, Math.max(colHeights.get(key) ?? 0, cell.dy + 1));
-  }
-
-  const { x, y, z } = brick.position;
-  return type.occupancyMap
-    .filter(cell => (colHeights.get(`${cell.dx},${cell.dz}`) ?? 0) > 1)
-    .map(cell => {
-      const rotated = rotateCell(cell.dx, cell.dz, type.studsX, type.studsZ, brick.rotation);
-      return { x: x + rotated.dx, y: y + cell.dy, z: z + rotated.dz };
-    });
+  return computeOccupiedCells(brick, type);
 }
 
 /**

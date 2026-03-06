@@ -45,100 +45,29 @@ function doParse(partId: string): BrickDefinition | null {
   if (!descLine.startsWith("0 ")) return null;
   const name = descLine.slice(2).trim();
 
-  // Try name-based dimension parsing for studsX/studsZ (reliable from name)
-  const dims = parseDimensionsFromName(name);
-  // Always compute geometry bounding box for accurate height
   const bbox = computeBoundingBox(filePath, new Set());
+  if (!bbox) return null;
 
-  if (!dims && !bbox) return null;
+  // Scene studsX maps to LDraw Z axis, studsZ maps to LDraw X (see toCell in
+  // computeOccupancyMap and the -90° Y rotation in LDrawPartLoader.prepareTemplate).
+  // Name-parsed dimensions are axis-ambiguous — LDraw naming conventions don't
+  // guarantee which of A,B in "Part A × B" corresponds to which axis (e.g. 6084
+  // inverts vs. 3001). The bbox is authoritative.
+  const studsX = Math.max(1, Math.round((bbox.maxZ - bbox.minZ) / LDU_PER_STUD));
+  const studsZ = Math.max(1, Math.round((bbox.maxX - bbox.minX) / LDU_PER_STUD));
 
-  // studsX/studsZ from name (reliable), fallback to geometry
-  const studsX = dims?.studsX ?? Math.max(1, Math.round((bbox!.maxX - bbox!.minX) / LDU_PER_STUD));
-  const studsZ = dims?.studsZ ?? Math.max(1, Math.round((bbox!.maxZ - bbox!.minZ) / LDU_PER_STUD));
+  const yExtent = bbox.maxY - bbox.minY;
+  const heightUnits = Math.max(
+    1,
+    Math.round(Math.max(0, yExtent - STUD_PROTRUSION_LDU) / LDU_PER_PLATE),
+  );
 
-  // heightUnits: prefer geometry (accurate for non-standard parts), fallback to name-parsed
-  let heightUnits: number;
-  if (bbox) {
-    const yExtent = bbox.maxY - bbox.minY;
-    heightUnits = Math.max(
-      1,
-      Math.round(Math.max(0, yExtent - STUD_PROTRUSION_LDU) / LDU_PER_PLATE),
-    );
-  } else {
-    heightUnits = dims!.heightUnits;
-  }
-
-  // Compute sparse occupancy map for non-rectangular parts
-  const occupancyMap = bbox
-    ? computeOccupancyMap(filePath, bbox, studsX, studsZ, heightUnits)
-    : undefined;
+  const occupancyMap = computeOccupancyMap(filePath, bbox, studsX, studsZ, heightUnits);
 
   return { id: partId, name, studsX, studsZ, heightUnits, occupancyMap };
 }
 
-/**
- * Extract dimensions from LDraw part name patterns:
- *   "Brick 2 x 4"         → 2×4 studs, height=3 plates
- *   "Plate 1 x 2"         → 1×2 studs, height=1 plate
- *   "Tile 1 x 1"          → 1×1 studs, height=1 plate
- *   "Slope 45 2 x 2"      → 2×2 studs, height=3 plates
- *   "Brick 1 x 2 x 5"     → 1×2 studs, height=15 plates (5 brick heights)
- *   "Technic Brick 1 x 4"  → 1×4 studs, height=3 plates
- */
-function parseDimensionsFromName(
-  name: string,
-): {
-  studsX: number;
-  studsZ: number;
-  heightUnits: number;
-  heightSource: "explicit" | "default";
-} | null {
-  const dimMatch = name.match(
-    /(\d+)\s*x\s*(\d+)(?:\s*x\s*(\d+(?:\.\d+)?))?/i,
-  );
-  if (!dimMatch) return null;
-
-  const d1 = parseInt(dimMatch[1], 10);
-  const d2 = parseInt(dimMatch[2], 10);
-  const d3 = dimMatch[3] ? parseFloat(dimMatch[3]) : null;
-
-  if (isNaN(d1) || isNaN(d2) || d1 <= 0 || d2 <= 0) return null;
-
-  const upper = name.toUpperCase();
-  const isPlateOrTile =
-    upper.includes("PLATE") ||
-    upper.includes("TILE") ||
-    upper.includes("BASEPLATE");
-
-  // Parts that use plate-height units in their name's 3rd dimension
-  const usesPlateHeight =
-    isPlateOrTile ||
-    upper.includes("BRACKET") ||
-    upper.includes("ANGLE PLATE") ||
-    upper.includes("HINGE") ||
-    upper.includes("JUMPER");
-
-  let heightUnits: number;
-  let heightSource: "explicit" | "default";
-  if (d3 !== null && d3 > 0) {
-    // Explicit height dimension
-    heightUnits = usesPlateHeight
-      ? Math.round(d3)
-      : Math.round(d3 * 3);
-    heightSource = "explicit";
-  } else if (isPlateOrTile) {
-    heightUnits = 1;
-    heightSource = "default";
-  } else {
-    // Default: standard brick height (3 plates)
-    heightUnits = 3;
-    heightSource = "default";
-  }
-
-  return { studsX: d1, studsZ: d2, heightUnits, heightSource };
-}
-
-// ── Geometry-based bounding box (fallback) ──────────────────────────────────
+// ── Geometry-based bounding box ──────────────────────────────────────────────
 
 interface BoundingBox {
   minX: number;

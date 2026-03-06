@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import type { App } from '@modelcontextprotocol/ext-apps';
 import { SceneManager } from '../three/SceneManager';
 import { GridHelper } from '../three/GridHelper';
 import { SceneReconciler } from '../engine/SceneReconciler';
@@ -13,6 +14,7 @@ export interface SceneManagerHandle {
 }
 
 export function useSceneManager(
+  app: App | null,
   containerRef: React.RefObject<HTMLDivElement | null>,
   sceneData: SceneData | null,
   cameraState: CameraState | null,
@@ -20,7 +22,7 @@ export function useSceneManager(
   const [handle, setHandle] = useState<SceneManagerHandle | null>(null);
   const [ldrawReady, setLdrawReady] = useState(false);
 
-  // Initialize Three.js scene and LDraw loader
+  // Initialize Three.js scene
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -32,24 +34,32 @@ export function useSceneManager(
     const h = { sceneManager, gridHelper, reconciler };
     setHandle(h);
 
-    // Init LDraw loader — parts load on-demand via HTTP from /ldraw/
-    const initLDraw = async () => {
-      try {
-        await ldrawPartLoader.init();
-      } catch (e) {
-        console.warn('LDraw init() failed, continuing with defaults', e);
-      }
-      setLdrawReady(true);
-    };
-
-    initLDraw();
-
     return () => {
       reconciler.dispose();
       sceneManager.dispose();
       setHandle(null);
     };
   }, [containerRef]);
+
+  // Wire the LDraw loader to fetch .dat files through the MCP tool channel.
+  // The iframe inside Claude has no HTTP origin, so /ldraw/ fetches would fail.
+  useEffect(() => {
+    if (!app || ldrawReady) return;
+    ldrawPartLoader.init(async (partId) => {
+      try {
+        const result = await app.callServerTool({ name: 'brick_get_ldraw_files', arguments: { partId } });
+        if (result.isError) return null;
+        const text = result.content?.find(c => c.type === 'text');
+        if (!text || !('text' in text)) return null;
+        const payload = JSON.parse(text.text as string) as { files?: Record<string, string> };
+        return payload.files ?? null;
+      } catch (e) {
+        console.warn(`brick_get_ldraw_files(${partId}) failed:`, e);
+        return null;
+      }
+    });
+    setLdrawReady(true);
+  }, [app, ldrawReady]);
 
   // Re-reconcile when LDraw becomes ready (upgrades procedural → LDraw meshes)
   useEffect(() => {

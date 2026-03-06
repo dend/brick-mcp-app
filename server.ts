@@ -197,8 +197,8 @@ You only need to call brick_read_me once. Do NOT call it again — you will not 
 
 ## Order of Operations (MANDATORY — follow exactly)
 1. brick_read_me → Call once to learn the building format and rules (you just did this)
-2. brick_get_available → Call to see popular brick types and their dimensions
-   - Optional: brick_search_parts → Search or browse the full library of ${partsIndex.totalParts}+ parts by name or category
+2. brick_get_available → Returns a starter set of popular parts AND a category index of the full ${partsIndex.totalParts}-part library
+   - brick_search_parts → Get any category or search by name. Results include dimensions (studsX, studsZ, heightUnits) so you can brick_place directly. Example: brick_search_parts({category: "Arch"}) returns all arches; brick_search_parts({query: "corner"}) finds corner parts across categories.
 3. brick_render_scene → Call BEFORE placing any bricks. This opens the 3D viewer for the user. If you skip this step, the user cannot see anything you build.
 4. brick_place → Now you can place bricks. Each brick appears live in the viewer as it's placed.
 5. brick_get_scene → Call anytime to inspect what's currently built
@@ -208,7 +208,7 @@ You only need to call brick_read_me once. Do NOT call it again — you will not 
 CRITICAL: You must call brick_render_scene before your first brick_place call. Placing bricks without rendering the scene first means the user has no viewer open and sees nothing.
 
 ## Brick Types
-Any LDraw part number works as a typeId. Call brick_get_available to see popular parts with their dimensions. For the full library (${partsIndex.totalParts}+ parts), use brick_search_parts to search by name or browse by category. You can also use any valid LDraw part number (e.g. "2454", "4460", "6141") — the server auto-detects dimensions from the LDraw library.
+Any LDraw part number works as a typeId. brick_get_available gives you ~30 starters plus the full category index. brick_search_parts gives you any category or name match with dimensions included — use it whenever you want a shape that isn't in the starter set. Example: need an arch for a doorway → brick_search_parts({category: "Arch"}) → pick one → brick_place.
 
 ## Coordinate System
 - Baseplate: ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs on the X and Z axes
@@ -398,7 +398,7 @@ export function createServer(): McpServer {
       annotations: { readOnlyHint: true },
     },
     async () => {
-      const parts: { typeId: string; name: string; studsX: number; studsZ: number; heightUnits: number; occupancyMap?: { dx: number; dy: number; dz: number }[] }[] = [];
+      const parts: { typeId: string; name: string; studsX: number; studsZ: number; heightUnits: number }[] = [];
       for (const partId of POPULAR_PART_IDS) {
         const def = parseLDrawPart(partId);
         if (def) {
@@ -408,13 +408,17 @@ export function createServer(): McpServer {
             studsX: def.studsX,
             studsZ: def.studsZ,
             heightUnits: def.heightUnits,
-            ...(def.occupancyMap ? { occupancyMap: def.occupancyMap } : {}),
           });
         }
       }
+      const categories = Object.entries(partsIndex.categories)
+        .map(([name, list]) => ({ name, count: list.length }))
+        .sort((a, b) => b.count - a.count);
       const result = {
         parts,
-        note: "typeId values are LDraw part numbers (e.g. '3001' = Brick 2x4). Use exact typeId values in brick_place. Rotation swaps X and Z dimensions (e.g. 3001 at rotation 90 occupies X=4, Z=2). You can also use any valid LDraw part number not listed here — dimensions are auto-detected.",
+        categories,
+        totalParts: partsIndex.totalParts,
+        note: `The ${parts.length} parts above are a curated starter set. The full library has ${partsIndex.totalParts} parts across ${categories.length} categories (see 'categories' above). To get any category with dimensions, call brick_search_parts({category: "Slope"}) or search by name with brick_search_parts({query: "corner"}). All results include studsX/studsZ/heightUnits ready for brick_place.`,
       };
       return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
     },
@@ -514,7 +518,12 @@ export function createServer(): McpServer {
       }
 
       const total = results.length;
-      const page = results.slice(off, off + lim);
+      const page = results.slice(off, off + lim).map((p) => {
+        const def = parseLDrawPart(p.id);
+        return def
+          ? { ...p, studsX: def.studsX, studsZ: def.studsZ, heightUnits: def.heightUnits }
+          : p;
+      });
 
       return {
         content: [{
@@ -531,7 +540,83 @@ export function createServer(): McpServer {
     },
   );
 
-  // ── Tool 2c: brick_get_part_info (app-only) ────────────────────────────
+  // ── Tool 2c: brick_get_ldraw_files (app-only) ──────────────────────────
+  // The MCP App iframe inside Claude has no HTTP origin, so relative fetches
+  // to /ldraw/*.dat fail. This tool delivers the part file plus every
+  // transitive subfile reference so LDrawLoader can resolve them from blob URLs.
+
+  function collectLDrawFiles(partId: string): Record<string, string> | null {
+    const entry = path.join(LDRAW_DIR, "parts", `${partId}.dat`);
+    if (!fsSync.existsSync(entry)) return null;
+
+    const files: Record<string, string> = {};
+
+    const resolveSub = (parentPath: string, ref: string): string | null => {
+      const normalized = ref.replace(/\\/g, "/");
+      const parentDir = path.dirname(parentPath);
+      const candidates = [
+        path.join(parentDir, normalized),
+        path.join(LDRAW_DIR, "parts", normalized),
+        path.join(LDRAW_DIR, "p", normalized),
+        path.join(LDRAW_DIR, normalized),
+      ];
+      for (const c of candidates) if (fsSync.existsSync(c)) return c;
+      const lower = normalized.toLowerCase();
+      if (lower !== normalized) {
+        for (const c of [
+          path.join(parentDir, lower),
+          path.join(LDRAW_DIR, "parts", lower),
+          path.join(LDRAW_DIR, "p", lower),
+          path.join(LDRAW_DIR, lower),
+        ]) if (fsSync.existsSync(c)) return c;
+      }
+      return null;
+    };
+
+    const walk = (absPath: string) => {
+      const rel = path.relative(LDRAW_DIR, absPath).replace(/\\/g, "/");
+      if (files[rel]) return;
+      const content = fsSync.readFileSync(absPath, "utf-8");
+      files[rel] = content;
+      for (const line of content.split("\n")) {
+        const tokens = line.trim().split(/\s+/);
+        if (tokens[0] === "1" && tokens.length >= 15) {
+          const sub = resolveSub(absPath, tokens.slice(14).join(" "));
+          if (sub) walk(sub);
+        }
+      }
+    };
+
+    walk(entry);
+    return files;
+  }
+
+  registerAppTool(
+    server,
+    "brick_get_ldraw_files",
+    {
+      title: "Get LDraw Files",
+      description: "Fetch the raw LDraw .dat file for a part plus all its transitive subfile dependencies, for client-side mesh construction.",
+      inputSchema: {
+        partId: z.string().describe("LDraw part ID (e.g. '3001')"),
+      },
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    async ({ partId }) => {
+      const files = collectLDrawFiles(partId);
+      if (!files) {
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify({ error: `Part not found: ${partId}` }) }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({ files }) }],
+      };
+    },
+  );
+
+  // ── Tool 2d: brick_get_part_info (app-only) ────────────────────────────
 
   registerAppTool(
     server,

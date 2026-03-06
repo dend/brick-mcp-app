@@ -354,10 +354,14 @@ async function ensureLDrawTemplate(partId) {
     const toRemove = [];
     container.traverse(child => { if (child.isConditionalLine) toRemove.push(child); });
     toRemove.forEach(obj => obj.parent?.remove(obj));
-    // Compute world-space bounding box for accurate Y positioning
+    // Compute world-space bounding box for corner-origin positioning.
+    // X/Z needed because LDraw geometry is not always centered at its origin
+    // (e.g. 6084 has Z∈[-30,42], center=+6) so studs*0.5 would misalign the mesh.
     container.updateMatrixWorld(true);
     const bbox = new THREE.Box3().setFromObject(container);
-    container.userData.geoBbox = { minY: bbox.min.y, maxY: bbox.max.y };
+    container.userData.geoBbox = {
+      minX: bbox.min.x, minY: bbox.min.y, minZ: bbox.min.z, maxY: bbox.max.y,
+    };
     ldrawTemplates.set(partId, container);
     return container;
   } catch (e) {
@@ -374,8 +378,11 @@ function createLDrawBrickMesh(brick) {
 
   const clone = template.clone();
   const geoBbox = template.userData.geoBbox;
-  const h = geoBbox ? Math.abs(geoBbox.minY) : cat.heightUnits * PLATE_HEIGHT;
-  clone.position.set(cat.studsX * 0.5, h, cat.studsZ * 0.5);
+  if (geoBbox) {
+    clone.position.set(-geoBbox.minX, -geoBbox.minY, -geoBbox.minZ);
+  } else {
+    clone.position.set(cat.studsX * 0.5, cat.heightUnits * PLATE_HEIGHT, cat.studsZ * 0.5);
+  }
 
   const color = new THREE.Color(brick.color);
   const edgeColor = color.clone().multiplyScalar(0.5);
@@ -1144,28 +1151,7 @@ function computeOccupiedCells(typeId, x, y, z, rotation) {
   return cells;
 }
 
-// Collision cells: excludes thin plate-surface columns (height=1) from
-// non-rectangular parts so brackets can nest over existing bricks.
-function computeCollisionCells(typeId, x, y, z, rotation) {
-  const cat = knownTypes[typeId];
-  if (!cat || !cat.occupancyMap) return computeOccupiedCells(typeId, x, y, z, rotation);
-
-  const colHeights = new Map();
-  for (const cell of cat.occupancyMap) {
-    const key = `${cell.dx},${cell.dz}`;
-    colHeights.set(key, Math.max(colHeights.get(key) ?? 0, cell.dy + 1));
-  }
-
-  return cat.occupancyMap
-    .filter(cell => (colHeights.get(`${cell.dx},${cell.dz}`) ?? 0) > 1)
-    .map(cell => {
-      const r = rotateCell(cell.dx, cell.dz, cat.studsX, cat.studsZ, rotation);
-      return { x: x + r.dx, y: y + cell.dy, z: z + r.dz };
-    });
-}
-
-// Bottom-layer cells (dy=0) for auto-elevation of non-rectangular parts.
-// Avoids wall voxelization artifacts while detecting real base overlap.
+// Bottom-layer cells (dy=0) — used for support checking.
 function computeBottomCells(typeId, x, y, z, rotation) {
   const cat = knownTypes[typeId];
   if (!cat) return [];
@@ -1335,11 +1321,8 @@ function raycastPlacement(event) {
       for (const c of cells) occupied.add(`${c.x},${c.y},${c.z}`);
     }
     // Standard upward scan from gridY until no collision.
-    // Non-rectangular parts: use bottom-layer cells (dy=0) to avoid wall artifacts.
     for (let attempt = 0; attempt < 100; attempt++) {
-      const cells = placeCat.occupancyMap
-        ? computeBottomCells(placeTypeId, gridX, gridY, gridZ, placeRotation)
-        : computeCollisionCells(placeTypeId, gridX, gridY, gridZ, placeRotation);
+      const cells = computeOccupiedCells(placeTypeId, gridX, gridY, gridZ, placeRotation);
       if (!cells.some(c => occupied.has(`${c.x},${c.y},${c.z}`))) break;
       gridY++;
     }
@@ -1359,8 +1342,11 @@ function createGhostMesh(typeId, rotation) {
   if (template) {
     const clone = template.clone();
     const geoBbox = template.userData.geoBbox;
-    const gh = geoBbox ? Math.abs(geoBbox.minY) : cat.heightUnits * PLATE_HEIGHT;
-    clone.position.set(cat.studsX * 0.5, gh, cat.studsZ * 0.5);
+    if (geoBbox) {
+      clone.position.set(-geoBbox.minX, -geoBbox.minY, -geoBbox.minZ);
+    } else {
+      clone.position.set(cat.studsX * 0.5, cat.heightUnits * PLATE_HEIGHT, cat.studsZ * 0.5);
+    }
 
     const ghostMat = new THREE.MeshStandardMaterial({
       color: 0x00ff00, transparent: true, opacity: 0.45, depthWrite: false,
