@@ -59,41 +59,11 @@ export class RaycastHelper {
           gridZ = Math.floor(hit.point.z / STUD_SIZE);
 
           if (bt.occupancyMap) {
-            // For non-rectangular parts, find the height of the specific column that was hit
-            const cells = computeOccupiedCells(hitBrick as BrickLike, bt);
-
-            // Find cells matching the hit column
-            let matchingCells = cells.filter(c => c.x === gridX && c.z === gridZ);
-
-            // Mesh boundary fix: if hit point falls just outside the brick's
-            // occupied cells (floating-point edge), snap to the nearest column
-            if (matchingCells.length === 0) {
-              let bestDist = Infinity;
-              let bestX = gridX, bestZ = gridZ;
-              const seen = new Set<string>();
-              for (const c of cells) {
-                const key = `${c.x},${c.z}`;
-                if (seen.has(key)) continue;
-                seen.add(key);
-                const dist = Math.abs(c.x - gridX) + Math.abs(c.z - gridZ);
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  bestX = c.x;
-                  bestZ = c.z;
-                }
-              }
-              gridX = bestX;
-              gridZ = bestZ;
-              matchingCells = cells.filter(c => c.x === gridX && c.z === gridZ);
-            }
-
-            let colTop = hitBrick.position.y; // fallback: brick base
-            for (const c of matchingCells) {
-              if (c.y + 1 > colTop) {
-                colTop = c.y + 1;
-              }
-            }
-            gridY = colTop;
+            // Sparse parts have gaps the ghost might nest INTO, not just stack on.
+            // Starting at the brick's base lets auto-elevate find the lowest legal
+            // spot — a nest slot beside a short column, or stack-on-top for a tall
+            // one. colTop would start ABOVE the gap and auto-elevate only climbs.
+            gridY = hitBrick.position.y;
           } else {
             gridY = hitBrick.position.y + bt.heightUnits;
           }
