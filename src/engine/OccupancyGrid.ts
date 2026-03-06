@@ -136,13 +136,27 @@ export function computeCollisionCells(brick: BrickLike, type: BrickDimensions): 
     colHeights.set(key, Math.max(colHeights.get(key) ?? 0, cell.dy + 1));
   }
 
-  // Only include cells from columns taller than 1 plate (structural, not surface)
+  // Exclude non-structural columns using neighbor-connectivity:
+  // A column is structural only if height > 1 AND it has at least one
+  // tall (h>1) neighbor on EACH horizontal axis (dx AND dz).
+  // This correctly filters thin walls (bracket wall has no tall dx-neighbor)
+  // while keeping solid 2x2+ regions (tall neighbors on both axes).
+  function isTall(dx: number, dz: number): boolean {
+    return (colHeights.get(`${dx},${dz}`) ?? 0) > 1;
+  }
+
+  const structuralCols = new Set<string>();
+  for (const [key, h] of colHeights) {
+    if (h <= 1) continue;
+    const [dx, dz] = key.split(',').map(Number);
+    const hasTallDxNeighbor = isTall(dx - 1, dz) || isTall(dx + 1, dz);
+    const hasTallDzNeighbor = isTall(dx, dz - 1) || isTall(dx, dz + 1);
+    if (hasTallDxNeighbor && hasTallDzNeighbor) structuralCols.add(key);
+  }
+
   const { x, y, z } = brick.position;
   return type.occupancyMap
-    .filter(cell => {
-      const key = `${cell.dx},${cell.dz}`;
-      return (colHeights.get(key) ?? 0) > 1;
-    })
+    .filter(cell => structuralCols.has(`${cell.dx},${cell.dz}`))
     .map(cell => {
       const rotated = rotateCell(cell.dx, cell.dz, type.studsX, type.studsZ, brick.rotation);
       return { x: x + rotated.dx, y: y + cell.dy, z: z + rotated.dz };

@@ -48,8 +48,13 @@ export class RaycastHelper {
       const brickId = hit.object.userData.brickId as string;
       const hitBrick = bricks?.find(b => b.id === brickId);
       if (hitBrick) {
+        // Detect side-face hits: skip stacking when ray hits the side of a brick
+        const worldNormal = hit.face?.normal?.clone();
+        if (worldNormal) worldNormal.transformDirection(hit.object.matrixWorld);
+        const isSideHit = worldNormal && Math.abs(worldNormal.y) < 0.5;
+
         const bt = getBrickType(hitBrick.typeId);
-        if (bt) {
+        if (bt && !isSideHit) {
           gridX = Math.floor(hit.point.x / STUD_SIZE);
           gridZ = Math.floor(hit.point.z / STUD_SIZE);
 

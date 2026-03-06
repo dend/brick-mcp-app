@@ -1156,11 +1156,21 @@ function computeCollisionCells(typeId, x, y, z, rotation) {
     colHeights.set(key, Math.max(colHeights.get(key) ?? 0, cell.dy + 1));
   }
 
+  function isTall(dx, dz) {
+    return (colHeights.get(`${dx},${dz}`) ?? 0) > 1;
+  }
+
+  const structuralCols = new Set();
+  for (const [key, h] of colHeights) {
+    if (h <= 1) continue;
+    const [dx, dz] = key.split(',').map(Number);
+    const hasTallDxNeighbor = isTall(dx - 1, dz) || isTall(dx + 1, dz);
+    const hasTallDzNeighbor = isTall(dx, dz - 1) || isTall(dx, dz + 1);
+    if (hasTallDxNeighbor && hasTallDzNeighbor) structuralCols.add(key);
+  }
+
   return cat.occupancyMap
-    .filter(cell => {
-      const key = `${cell.dx},${cell.dz}`;
-      return (colHeights.get(key) ?? 0) > 1;
-    })
+    .filter(cell => structuralCols.has(`${cell.dx},${cell.dz}`))
     .map(cell => {
       const r = rotateCell(cell.dx, cell.dz, cat.studsX, cat.studsZ, rotation);
       return { x: x + r.dx, y: y + cell.dy, z: z + r.dz };
@@ -1220,8 +1230,13 @@ function raycastPlacement(event) {
         obj = obj.parent;
       }
       if (hitBrick) {
+        // Detect side-face hits: skip stacking when ray hits the side of a brick
+        const worldNormal = hit.face?.normal?.clone();
+        if (worldNormal) worldNormal.transformDirection(hit.object.matrixWorld);
+        const isSideHit = worldNormal && Math.abs(worldNormal.y) < 0.5;
+
         const hitCat = knownTypes[hitBrick.typeId];
-        if (hitCat) {
+        if (hitCat && !isSideHit) {
           gridX = Math.floor(hit.point.x / STUD_SIZE);
           gridZ = Math.floor(hit.point.z / STUD_SIZE);
 
