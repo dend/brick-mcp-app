@@ -53,7 +53,7 @@ try {
       allParts.push({ id: part.id, name: part.name, category });
     }
   }
-  console.log(`Loaded LDraw parts index: ${partsIndex.totalParts} parts across ${Object.keys(partsIndex.categories).length} categories`);
+  console.error(`Loaded LDraw parts index: ${partsIndex.totalParts} parts across ${Object.keys(partsIndex.categories).length} categories`);
 } catch {
   console.warn("LDraw parts index not found — brick_search_parts will return empty results. Run 'npm run generate:index' to generate it.");
 }
@@ -199,8 +199,8 @@ You only need to call brick_read_me once. Do NOT call it again — you will not 
 1. brick_read_me → Call once to learn the building format and rules (you just did this)
 2. brick_get_available → Returns a starter set of popular parts AND a category index of the full ${partsIndex.totalParts}-part library
    - brick_search_parts → Get any category or search by name. Results include dimensions (studsX, studsZ, heightUnits) so you can brick_place directly. Example: brick_search_parts({category: "Arch"}) returns all arches; brick_search_parts({query: "corner"}) finds corner parts across categories.
-3. brick_render_scene → Call BEFORE placing any bricks. This opens the 3D viewer for the user. If you skip this step, the user cannot see anything you build.
-4. brick_place → Now you can place bricks. Each brick appears live in the viewer as it's placed.
+3. brick_render_scene → Call BEFORE placing any bricks. Opens the 3D viewer. You can pass initialBricks CSV to seed the scene — lines stream into the viewer live as you generate them. If you skip this step, the user cannot see anything you build.
+4. brick_place → Place one or many bricks via CSV (one row per brick). They stream into the viewer live, row by row, as the tool runs.
 5. brick_get_scene → Call anytime to inspect what's currently built
 6. brick_remove_brick → Remove a specific brick by ID (use brick_get_scene to find IDs). Also removes unsupported bricks above it.
 7. brick_clear_scene → Call to remove all bricks and start over
@@ -218,7 +218,8 @@ Any LDraw part number works as a typeId. brick_get_available gives you ~30 start
 - Bricks CANNOT float — they must sit on the baseplate (Y=0) or on top of another brick
 - ALL positions are relative to the baseplate. A brick's entire footprint (position + size) must stay within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. Out-of-bounds placements are rejected.
 - A brick at position (x, z) with studsX=2, studsZ=4 occupies x to x+2, z to z+4. So the maximum valid x for that brick is ${BASEPLATE_SIZE - 2}, and the maximum valid z is ${BASEPLATE_SIZE - 4}.
-- IMPORTANT: Every brick_place response includes a "footprint" showing the brick's exact occupied area: {minX, maxX, minZ, maxZ, topY}. Use footprint.maxX/maxZ to know where to place the NEXT brick adjacent to it. Use footprint.topY for the Y value of the next layer on top.
+- IMPORTANT: Every brick_place response includes a per-row "footprint" showing each brick's exact occupied area: {minX, maxX, minZ, maxZ, topY}. Use footprint.maxX/maxZ to know where to place the NEXT brick adjacent to it. Use footprint.topY for the Y value of the next layer on top.
+- You can batch many bricks in one brick_place call (one CSV row each). When tiling with a known dimension (e.g. 3001 is 2×4 → z advances by 4), compute the whole batch up front. When unsure of a part's footprint, place it alone first and read the response.
 - brick_get_scene also returns footprints for every brick. ALWAYS read footprints to position new bricks — never calculate positions from scratch when existing bricks have footprints.
 
 ## Size & Scale Reference
@@ -270,31 +271,36 @@ To stack on top: y=3 (footprint.topY)
 
 ## Examples
 
-Each brick_place call places ONE brick. Build bottom-up — always place supports before the bricks on top.
+brick_place takes CSV: typeId,x,y,z,rotation,color — one brick per line. Build bottom-up — always list supports before the bricks resting on them.
 
-### Wall (4 bricks tall)
-Place first brick, then use footprint.topY for each subsequent layer:
-  brick_place(typeId="3008", x=10, y=0, z=10, color="#cc0000")   ← 3008 = Brick 1x8
-    → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:3}
-  brick_place(typeId="3008", x=10, y=3, z=10, color="#cc0000")   ← y=3 from topY
-    → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:6}
-  brick_place(typeId="3008", x=10, y=6, z=10, color="#cc0000")   ← y=6 from topY
-  brick_place(typeId="3008", x=10, y=9, z=10, color="#cc0000")   ← y=9 from topY
+### Single brick
+  brick_place(bricks="3001,10,0,10,0,#cc0000")
+    → results[0].footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
 
-### Placing side by side along Z
-Use footprint.maxZ from each response for the next brick's z:
-  brick_place(typeId="3001", x=10, y=0, z=10, color="#cc0000")   ← 3001 = Brick 2x4
-    → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
-  brick_place(typeId="3001", x=10, y=0, z=14, color="#0055bf")   ← z=14 from maxZ
-    → footprint: {minX:10, maxX:12, minZ:14, maxZ:18, topY:3}
-  brick_place(typeId="3001", x=10, y=0, z=18, color="#237841")   ← z=18 from maxZ
+### Wall (4 bricks tall, one call — streams into viewer row by row)
+3008 = Brick 1x8, heightUnits=3 → y advances by 3 per layer:
+  brick_place(bricks="3008,10,0,10,0,#cc0000
+  3008,10,3,10,0,#cc0000
+  3008,10,6,10,0,#cc0000
+  3008,10,9,10,0,#cc0000")
+    → results: [{row:1, ok:true, footprint:{...topY:3}}, {row:2, ok:true, footprint:{...topY:6}}, ...]
 
-### Placing side by side along X
-Use footprint.maxX from each response for the next brick's x:
-  brick_place(typeId="3001", x=10, y=0, z=10, color="#cc0000")   ← 3001 = Brick 2x4
-    → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
-  brick_place(typeId="3001", x=12, y=0, z=10, color="#0055bf")   ← x=12 from maxX
-  brick_place(typeId="3001", x=14, y=0, z=10, color="#237841")   ← x=14 from maxX
+### Row along Z (one call)
+3001 = Brick 2x4, studsZ=4 → z advances by 4:
+  brick_place(bricks="3001,10,0,10,0,#cc0000
+  3001,10,0,14,0,#0055bf
+  3001,10,0,18,0,#237841")
+
+### Row along X (one call)
+3001 studsX=2 → x advances by 2:
+  brick_place(bricks="3001,10,0,10,0,#cc0000
+  3001,12,0,10,0,#0055bf
+  3001,14,0,10,0,#237841")
+
+### Unknown part dimensions → place one, read footprint, then batch
+  brick_place(bricks="3003,20,0,20")                      ← 3003 = ? place alone
+    → results[0].footprint: {minX:20, maxX:22, minZ:20, maxZ:22, topY:3}   (it's 2×2)
+  brick_place(bricks="3003,22,0,20\\n3003,24,0,20\\n3003,26,0,20")   ← now batch with x+=2
 
 ### Rotation changes footprint — always read it
   3001 (Brick 2x4) at rotation "0":  footprint maxX = x+2, maxZ = z+4
@@ -303,7 +309,7 @@ Use footprint.maxX from each response for the next brick's x:
 ## Rules
 - Build BOTTOM-UP: y=0 first, then y=3, y=6, etc. Floating bricks are rejected.
 - Use typeId values from brick_get_available for popular parts. You can also use any LDraw part number — the server will auto-detect dimensions from the LDraw library.
-- Each brick_place returns success with the brick ID, or an error explaining why it failed. Read the error and adjust.
+- brick_place returns {summary:{placed,failed,totalBricks}, results:[...]}. Each row result is either {ok:true, id, footprint} or {ok:false, error, line}. Rows are processed sequentially — a failed row doesn't block later rows, but a missing support will fail everything above it. Read per-row errors and adjust.
 - Rotation swaps dimensions — account for this when tiling.
 - ALL bricks must fit within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. The brick's full footprint (position + studs size) must not exceed x=${BASEPLATE_SIZE - 1} or z=${BASEPLATE_SIZE - 1}. Out-of-bounds placements are rejected.
 - BEFORE placing a new brick, call brick_get_scene to see where existing bricks are. Position new bricks RELATIVE to what's already placed — adjacent to, on top of, or next to existing bricks. Never guess positions from scratch when there are already bricks in the scene.
@@ -650,11 +656,44 @@ export function createServer(): McpServer {
     "brick_render_scene",
     {
       title: "Render Brick Scene",
-      description: "Opens the 3D brick builder viewer. You MUST call this before brick_place so the user can see the bricks. Call brick_read_me first to learn the brick format.",
-      inputSchema: {},
+      description: "Opens the 3D brick builder viewer. You MUST call this before brick_place so the user can see the bricks. Call brick_read_me first to learn the brick format. Optionally pass initialBricks CSV to seed the scene — bricks stream into the viewer live as you generate each line.",
+      inputSchema: {
+        initialBricks: z.string().optional().describe(
+          "Optional CSV, same format as brick_place: typeId,x,y,z,rotation,color — one brick per line. " +
+          "GENERATE LAST: these lines stream into the 3D viewer live as you type them (row by row via input_json_delta). " +
+          "Omit to open an empty viewer."
+        ),
+      },
       _meta: { ui: { resourceUri } },
     },
-    async () => sceneResult("Scene rendered"),
+    // Widget's ontoolinputpartial handler streams lines to brick_place as they arrive.
+    // This fallback covers the case where the widget didn't mount in time / host
+    // didn't deliver partial input — collision check makes it idempotent with any
+    // bricks the widget already placed.
+    async ({ initialBricks }) => {
+      if (initialBricks) {
+        const lines = initialBricks.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+        for (const line of lines) {
+          const [typeId, xs, ys, zs, rot, col] = line.split(",").map(c => c.trim());
+          const x = parseInt(xs, 10), y = parseInt(ys, 10), z = parseInt(zs, 10);
+          if (!typeId || !Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z)) continue;
+          const rotation = (rot || "0") as "0" | "90" | "180" | "270";
+          if (!["0", "90", "180", "270"].includes(rotation)) continue;
+          const brickType = findBrickType(typeId);
+          if (!brickType) continue;
+          const instance: BrickInstance = {
+            id: generateId(), typeId, position: { x, y, z },
+            rotation: Number(rotation) as 0 | 90 | 180 | 270, color: col || "#cc0000",
+          };
+          if (checkBounds(instance, brickType)) continue;
+          if (!checkSupport(scene.bricks, instance, brickType)) continue;
+          if (checkCollision(scene.bricks, instance, brickType)) continue;
+          scene.bricks.push(instance);
+          grid.place(instance.id, computeOccupiedCells(instance, brickType));
+        }
+      }
+      return sceneResult("Scene rendered");
+    },
   );
 
   // ── Tool 4: brick_place (model-facing, no UI metadata) ────────────────
@@ -662,69 +701,93 @@ export function createServer(): McpServer {
   server.registerTool(
     "brick_place",
     {
-      description: "Place a single brick. Returns the placed brick with its ID, or an error explaining why placement failed. Call brick_render_scene first to open the viewer.",
+      description: `Place one or more bricks. Input is CSV — one brick per line, columns: typeId,x,y,z,rotation,color. Bricks are placed sequentially in row order and stream into the 3D viewer live as the tool runs. Returns a per-row result array with footprints for placed bricks and error messages for rejected rows. Call brick_render_scene first to open the viewer.`,
       inputSchema: {
-        typeId: z.string().describe("Brick type ID from brick_get_available or any LDraw part number"),
-        x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-        y: z.number().int().min(0).describe("Y position in plate-height units (0 = baseplate, +3 per standard brick layer)"),
-        z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-        rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation degrees. Swaps X/Z dimensions: e.g. 3001 (Brick 2x4) at 90° occupies X=4, Z=2"),
-        color: z.string().optional().default("#cc0000").describe("Hex color"),
+        bricks: z.string().describe(
+          `CSV, one brick per line. Columns: typeId,x,y,z,rotation,color\n` +
+          `  typeId   LDraw part number (e.g. 3001 = Brick 2x4)\n` +
+          `  x,y,z    integers — x/z in studs (0..${BASEPLATE_SIZE - 1}), y in plate units (0 = baseplate, +3 per brick layer)\n` +
+          `  rotation 0|90|180|270 (optional, default 0)\n` +
+          `  color    hex (optional, default #cc0000)\n` +
+          `Single brick: one line. Multiple bricks: multiple lines. NO header row.\n` +
+          `Example:\n3001,10,0,10,0,#cc0000\n3001,10,0,14,0,#0055bf\n3001,10,3,12,0,#237841`
+        ),
       },
     },
-    async ({ typeId, x, y, z, rotation, color }) => {
-      const brickType = findBrickType(typeId);
-      if (!brickType) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Call brick_get_available to see valid type IDs, or use any valid LDraw part number.` }) }],
-          isError: true,
-        };
+    async ({ bricks }) => {
+      const lines = bricks.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+      if (lines.length === 0) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "No brick rows found in CSV input" }) }], isError: true };
       }
-      const instance: BrickInstance = {
-        id: generateId(),
-        typeId,
-        position: { x, y, z },
-        rotation: Number(rotation ?? "0") as 0 | 90 | 180 | 270,
-        color: color ?? "#cc0000",
-      };
-      const boundsError = checkBounds(instance, brickType);
-      if (boundsError) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: boundsError, position: { x, y, z }, typeId }) }],
-          isError: true,
+
+      type RowResult =
+        | { row: number; ok: true; id: string; typeId: string; position: { x: number; y: number; z: number }; rotation: number; color: string; footprint: { minX: number; maxX: number; minZ: number; maxZ: number; topY: number } }
+        | { row: number; ok: false; error: string; line: string };
+      const results: RowResult[] = [];
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+      for (let i = 0; i < lines.length; i++) {
+        const cols = lines[i].split(",").map(c => c.trim());
+        const [typeId, xs, ys, zs, rot, col] = cols;
+        const x = parseInt(xs, 10), y = parseInt(ys, 10), z = parseInt(zs, 10);
+        const rotation = (rot || "0") as "0" | "90" | "180" | "270";
+        const color = col || "#cc0000";
+
+        if (!typeId || !Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z)) {
+          results.push({ row: i + 1, ok: false, error: "Malformed row — need typeId,x,y,z[,rotation,color]", line: lines[i] });
+          continue;
+        }
+        if (!["0", "90", "180", "270"].includes(rotation)) {
+          results.push({ row: i + 1, ok: false, error: `Invalid rotation "${rot}" — must be 0|90|180|270`, line: lines[i] });
+          continue;
+        }
+        const brickType = findBrickType(typeId);
+        if (!brickType) {
+          results.push({ row: i + 1, ok: false, error: `Unknown brick type "${typeId}"`, line: lines[i] });
+          continue;
+        }
+        const instance: BrickInstance = {
+          id: generateId(),
+          typeId,
+          position: { x, y, z },
+          rotation: Number(rotation) as 0 | 90 | 180 | 270,
+          color,
         };
+        const boundsError = checkBounds(instance, brickType);
+        if (boundsError) {
+          results.push({ row: i + 1, ok: false, error: boundsError, line: lines[i] });
+          continue;
+        }
+        if (!checkSupport(scene.bricks, instance, brickType)) {
+          results.push({ row: i + 1, ok: false, error: "No support — brick must be on baseplate (y=0) or resting on another brick", line: lines[i] });
+          continue;
+        }
+        if (checkCollision(scene.bricks, instance, brickType)) {
+          results.push({ row: i + 1, ok: false, error: "Collision — overlaps an existing brick", line: lines[i] });
+          continue;
+        }
+
+        scene.bricks.push(instance);
+        grid.place(instance.id, computeOccupiedCells(instance, brickType));
+        const aabb = getBrickAABB(instance, brickType);
+        results.push({
+          row: i + 1, ok: true, id: instance.id, typeId,
+          position: { x, y, z }, rotation: instance.rotation, color,
+          footprint: { minX: aabb.minX, maxX: aabb.maxX, minZ: aabb.minZ, maxZ: aabb.maxZ, topY: aabb.maxY },
+        });
+
+        // Yield to event loop so the widget's 1s poll sees bricks land progressively.
+        if (lines.length > 1) await sleep(60);
       }
-      if (!checkSupport(scene.bricks, instance, brickType)) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: "No support — brick must be on baseplate (y=0) or resting on top of another brick", position: { x, y, z }, typeId }) }],
-          isError: true,
-        };
-      }
-      if (checkCollision(scene.bricks, instance, brickType)) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: "Collision — overlaps an existing brick", position: { x, y, z }, typeId }) }],
-          isError: true,
-        };
-      }
-      scene.bricks.push(instance);
-      grid.place(instance.id, computeOccupiedCells(instance, brickType));
-      const aabb = getBrickAABB(instance, brickType);
+
+      const placed = results.filter(r => r.ok).length;
+      const failed = results.length - placed;
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          placed: {
-            id: instance.id,
-            typeId,
-            position: { x, y, z },
-            rotation: instance.rotation,
-            color: instance.color,
-            footprint: {
-              minX: aabb.minX, maxX: aabb.maxX,
-              minZ: aabb.minZ, maxZ: aabb.maxZ,
-              topY: aabb.maxY,
-            },
-          },
-          totalBricks: scene.bricks.length,
+          summary: { placed, failed, totalBricks: scene.bricks.length },
+          results,
         }) }],
+        isError: placed === 0 && failed > 0,
       };
     },
   );

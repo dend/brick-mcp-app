@@ -17,12 +17,12 @@ export class SceneManager {
     this.camera.position.set(40, 30, 40);
 
     // Renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(container.clientWidth, container.clientHeight);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(0x87ceeb);
+    this.renderer.setClearColor(0x000000, 0);
     container.appendChild(this.renderer.domElement);
 
     // Controls
