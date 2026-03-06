@@ -430,9 +430,34 @@ function computeOccupancyMap(
     }
   }
 
+  // LDraw surfaces are modeled precisely at stud/plate boundaries (integer
+  // multiples of 20/8 LDU). A vertex exactly on a boundary gets floor()'d into
+  // the higher-index cell — one the solid doesn't occupy. Two mitigations:
+  //  1. Skip axis-aligned triangles coplanar with a cell boundary. These are
+  //     zero-thickness walls that touch two cells equally but occupy neither;
+  //     perpendicular cap faces already mark the solid cells they bound.
+  //  2. Nudge remaining vertices 1% toward the triangle centroid. The centroid
+  //     is interior to the triangle, so boundary corners shift into the cell
+  //     the surface actually passes through.
+  const BOUNDARY_EPS = 0.01;
+  const NUDGE = 0.01;
+  const onGridBoundary = (v: number, unit: number) =>
+    Math.abs(v / unit - Math.round(v / unit)) < BOUNDARY_EPS / unit;
+
   for (const tri of triangles) {
     const [x0,y0,z0, x1,y1,z1, x2,y2,z2] = tri;
-    const c0 = toCell(x0,y0,z0), c1 = toCell(x1,y1,z1), c2 = toCell(x2,y2,z2);
+
+    const flatX = Math.abs(x0 - x1) < BOUNDARY_EPS && Math.abs(x1 - x2) < BOUNDARY_EPS;
+    const flatY = Math.abs(y0 - y1) < BOUNDARY_EPS && Math.abs(y1 - y2) < BOUNDARY_EPS;
+    const flatZ = Math.abs(z0 - z1) < BOUNDARY_EPS && Math.abs(z1 - z2) < BOUNDARY_EPS;
+    if (flatX && onGridBoundary(x0 - bbox.minX, LDU_PER_STUD)) continue;
+    if (flatY && onGridBoundary(bbox.maxY - y0, LDU_PER_PLATE)) continue;
+    if (flatZ && onGridBoundary(bbox.maxZ - z0, LDU_PER_STUD)) continue;
+
+    const cx = (x0 + x1 + x2) / 3, cy = (y0 + y1 + y2) / 3, cz = (z0 + z1 + z2) / 3;
+    const c0 = toCell(x0 + (cx - x0) * NUDGE, y0 + (cy - y0) * NUDGE, z0 + (cz - z0) * NUDGE);
+    const c1 = toCell(x1 + (cx - x1) * NUDGE, y1 + (cy - y1) * NUDGE, z1 + (cz - z1) * NUDGE);
+    const c2 = toCell(x2 + (cx - x2) * NUDGE, y2 + (cy - y2) * NUDGE, z2 + (cz - z2) * NUDGE);
 
     // Rasterize triangle edges (accurate thin-wall representation)
     rasterizeLine(c0, c1);
@@ -498,11 +523,17 @@ function collectTriangles(
     const lineType = parseInt(parts[0], 10);
 
     if (lineType === 1 && parts.length >= 15) {
+      const subFile = parts.slice(14).join(" ");
+      // Skip stud primitives: studs interlock with anti-studs and must not
+      // count as voxel occupancy (they'd fill gaps above interior surfaces,
+      // blocking valid nesting moves like stacking into a bracket's overhang).
+      const subBase = path.basename(subFile.replace(/\\/g, "/"));
+      if (/^(stud|stug|stu2)/i.test(subBase)) continue;
+
       const sx = parseFloat(parts[2]), sy = parseFloat(parts[3]), sz = parseFloat(parts[4]);
       const sa = parseFloat(parts[5]), sb = parseFloat(parts[6]), sc = parseFloat(parts[7]);
       const sd = parseFloat(parts[8]), se = parseFloat(parts[9]), sf = parseFloat(parts[10]);
       const sg = parseFloat(parts[11]), sh = parseFloat(parts[12]), si = parseFloat(parts[13]);
-      const subFile = parts.slice(14).join(" ");
       const subPath = resolveSubFile(resolved, subFile);
       if (!subPath) continue;
 
