@@ -10,7 +10,7 @@ html, body, #root {
   min-height: 480px;
   overflow: hidden;
   font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
-  background: var(--color-background-primary, #1a1a2e);
+  background: transparent;
   color: var(--color-text-primary, #e0e0e0);
 }
 
