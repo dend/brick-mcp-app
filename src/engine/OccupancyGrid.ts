@@ -55,10 +55,12 @@ export class OccupancyGrid {
 
   /** Check if the brick at given position has support (cell below bottom layer is occupied or on ground) */
   hasSupport(brick: BrickLike, dims: BrickDimensions): boolean {
+    const bottomCells = computeBottomCells(brick, dims);
+    if (bottomCells.length === 0) return false; // Defensive: no bottom → can't be supported
+
     const bottomY = brick.position.y;
     if (bottomY === 0) return true; // On baseplate
 
-    const bottomCells = computeBottomCells(brick, dims);
     return bottomCells.some(c => {
       const below = this.cells.get(this.key(c.x, c.y - 1, c.z));
       return below != null;

@@ -12,7 +12,7 @@ const isDevelopment = process.env.NODE_ENV === "development";
 export default defineConfig({
   plugins: [react(), viteSingleFile()],
   build: {
-    sourcemap: isDevelopment ? "inline" : undefined,
+    sourcemap: false,
     cssMinify: !isDevelopment,
     minify: !isDevelopment,
     rollupOptions: {
