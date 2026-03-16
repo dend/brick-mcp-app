@@ -50,13 +50,12 @@ function BrickApp() {
 
   const { app, error } = useApp({
     appInfo: { name: 'Brick Builder', version: '1.0.0' },
-    capabilities: {},
+    capabilities: { availableDisplayModes: ['inline', 'fullscreen'] },
     onAppCreated,
   });
 
   useHostStyles(app ?? null);
 
-  // Request fullscreen on mount
   useEffect(() => {
     if (!app) return;
     setHostContext(app.getHostContext());

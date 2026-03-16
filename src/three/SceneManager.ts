@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { AxesGizmo } from './AxesGizmo';
 
 export class SceneManager {
   scene: THREE.Scene;
@@ -7,6 +8,10 @@ export class SceneManager {
   renderer: THREE.WebGLRenderer;
   controls: OrbitControls;
   brickGroup: THREE.Group;
+  private gizmo: AxesGizmo;
+  private viewW = 1;
+  private viewH = 1;
+  private rafId = 0;
   private resizeObserver: ResizeObserver;
 
   constructor(container: HTMLDivElement) {
@@ -17,12 +22,15 @@ export class SceneManager {
     this.camera.position.set(40, 30, 40);
 
     // Renderer
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setSize(container.clientWidth, container.clientHeight);
+    this.viewW = container.clientWidth;
+    this.viewH = container.clientHeight;
+    this.renderer.setSize(this.viewW, this.viewH);
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    this.renderer.setClearColor(0x87ceeb);
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.autoClear = false;
     container.appendChild(this.renderer.domElement);
 
     // Controls
@@ -58,10 +66,14 @@ export class SceneManager {
     this.brickGroup = new THREE.Group();
     this.scene.add(this.brickGroup);
 
+    this.gizmo = new AxesGizmo();
+
     // Resize handling
     this.resizeObserver = new ResizeObserver(() => {
       const w = container.clientWidth;
       const h = container.clientHeight;
+      this.viewW = w;
+      this.viewH = h;
       this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
       this.renderer.setSize(w, h);
@@ -73,9 +85,12 @@ export class SceneManager {
   }
 
   private animate = () => {
-    requestAnimationFrame(this.animate);
+    this.rafId = requestAnimationFrame(this.animate);
     this.controls.update();
+    this.renderer.setViewport(0, 0, this.viewW, this.viewH);
+    this.renderer.clear();
     this.renderer.render(this.scene, this.camera);
+    this.gizmo.render(this.renderer, this.camera, this.viewW, this.viewH);
   };
 
   setCamera(position: { x: number; y: number; z: number }, target: { x: number; y: number; z: number }) {
@@ -85,7 +100,10 @@ export class SceneManager {
   }
 
   dispose() {
+    cancelAnimationFrame(this.rafId);
     this.resizeObserver.disconnect();
+    this.gizmo.dispose();
+    this.renderer.domElement.remove();
     this.renderer.dispose();
     this.controls.dispose();
   }

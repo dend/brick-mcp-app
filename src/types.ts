@@ -20,6 +20,8 @@ export interface SceneData {
   bricks: BrickInstance[];
   camera?: CameraState;
   dynamicTypes?: Record<string, BrickDefinition>;
+  buildMode?: 'strict' | 'relaxed';
+  snap?: boolean;
 }
 
 export interface ScenePayload {

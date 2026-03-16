@@ -26,7 +26,7 @@
     "watch": "cross-env INPUT=mcp-app.html vite build --watch",
     "serve": "tsx --watch main.ts",
     "dev": "cross-env NODE_ENV=development concurrently \"npm run watch\" \"npm run serve\"",
-    "start": "cross-env NODE_ENV=development npm run build && npm run serve",
+    "start": "npm run build && cross-env NODE_ENV=development npm run serve",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

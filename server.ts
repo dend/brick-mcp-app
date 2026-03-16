@@ -12,7 +12,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { BrickDefinition } from "./src/bricks/types.js";
 import { parseLDrawPart, setLDrawDir } from "./src/ldraw/ldraw-dimensions.js";
-import { OccupancyGrid, computeOccupiedCells, computeCollisionCells } from "./src/engine/OccupancyGrid.js";
+import { OccupancyGrid, computeOccupiedCells, computeCollisionCells, computeBottomCells } from "./src/engine/OccupancyGrid.js";
 
 // Initialize LDraw directory for the server-side parser
 const LDRAW_DIR = path.join(
@@ -53,7 +53,7 @@ try {
       allParts.push({ id: part.id, name: part.name, category });
     }
   }
-  console.log(`Loaded LDraw parts index: ${partsIndex.totalParts} parts across ${Object.keys(partsIndex.categories).length} categories`);
+  console.error(`Loaded LDraw parts index: ${partsIndex.totalParts} parts across ${Object.keys(partsIndex.categories).length} categories`);
 } catch {
   console.warn("LDraw parts index not found — brick_search_parts will return empty results. Run 'npm run generate:index' to generate it.");
 }
@@ -147,22 +147,116 @@ function checkCollision(
 
 const BASEPLATE_SIZE = 48;
 
-function checkBounds(brick: BrickInstance, brickType: BrickDefinition): string | null {
+// ── Batch limits ────────────────────────────────────────────────────────────
+// The host enforces a ~5MB cap on the burst of tool traffic following the
+// first scene render. Each new typeId triggers a brick_get_ldraw_files fetch
+// (up to ~1.6MB/part on the wire). Capping new types per batch keeps that
+// burst bounded; the row cap bounds the brick_place response itself.
+
+const MAX_BATCH_ROWS = 200;
+const MAX_NEW_TYPES_PER_BATCH = 10;
+
+function checkBounds(
+  brick: BrickInstance,
+  brickType: BrickDefinition,
+): { error: string; suggestedX?: number; suggestedZ?: number; suggestedY?: number } | null {
   const aabb = getBrickAABB(brick, brickType);
-  if (aabb.minX < 0 || aabb.maxX > BASEPLATE_SIZE) {
-    return `Brick extends outside baseplate on X axis (valid: 0–${BASEPLATE_SIZE - 1})`;
+  const spanX = aabb.maxX - aabb.minX;
+  const spanZ = aabb.maxZ - aabb.minZ;
+  if (aabb.maxX > BASEPLATE_SIZE) {
+    return {
+      error: `Brick extends outside baseplate on X axis (valid: 0–${BASEPLATE_SIZE - 1})`,
+      suggestedX: BASEPLATE_SIZE - spanX,
+    };
   }
-  if (aabb.minZ < 0 || aabb.maxZ > BASEPLATE_SIZE) {
-    return `Brick extends outside baseplate on Z axis (valid: 0–${BASEPLATE_SIZE - 1})`;
+  if (aabb.minX < 0) {
+    return {
+      error: `Brick extends outside baseplate on X axis (valid: 0–${BASEPLATE_SIZE - 1})`,
+      suggestedX: 0,
+    };
+  }
+  if (aabb.maxZ > BASEPLATE_SIZE) {
+    return {
+      error: `Brick extends outside baseplate on Z axis (valid: 0–${BASEPLATE_SIZE - 1})`,
+      suggestedZ: BASEPLATE_SIZE - spanZ,
+    };
+  }
+  if (aabb.minZ < 0) {
+    return {
+      error: `Brick extends outside baseplate on Z axis (valid: 0–${BASEPLATE_SIZE - 1})`,
+      suggestedZ: 0,
+    };
   }
   if (aabb.minY < 0) {
-    return "Brick is below the baseplate";
+    return { error: "Brick is below the baseplate", suggestedY: 0 };
   }
   return null;
 }
 
+/** Find the first existing brick whose cells this brick would collide with. */
+function findCollisionBlocker(
+  brick: BrickInstance,
+  brickType: BrickDefinition,
+): { id: string; typeId: string; footprint: { minX: number; maxX: number; minZ: number; maxZ: number; topY: number } } | null {
+  const cells = computeCollisionCells(brick, brickType);
+  for (const c of cells) {
+    const occupantId = grid.getOccupantAt(c.x, c.y, c.z);
+    if (occupantId) {
+      const blocker = scene.bricks.find(b => b.id === occupantId);
+      if (!blocker) return null;
+      const bt = findBrickType(blocker.typeId);
+      if (!bt) return null;
+      const aabb = getBrickAABB(blocker, bt);
+      return {
+        id: blocker.id,
+        typeId: blocker.typeId,
+        footprint: { minX: aabb.minX, maxX: aabb.maxX, minZ: aabb.minZ, maxZ: aabb.maxZ, topY: aabb.maxY },
+      };
+    }
+  }
+  return null;
+}
+
+/** Scan +X then +Z for the nearest open slot at this brick's Y. Never suggests out-of-bounds. */
+function scanForOpenSlot(
+  brick: BrickInstance,
+  brickType: BrickDefinition,
+): { suggestedX?: number; suggestedZ?: number } {
+  const MAX_SCAN = 8;
+  for (let dx = 1; dx <= MAX_SCAN; dx++) {
+    const probe: BrickInstance = { ...brick, position: { ...brick.position, x: brick.position.x + dx } };
+    if (checkBounds(probe, brickType)) break;
+    if (!checkCollision(scene.bricks, probe, brickType)) return { suggestedX: probe.position.x };
+  }
+  for (let dz = 1; dz <= MAX_SCAN; dz++) {
+    const probe: BrickInstance = { ...brick, position: { ...brick.position, z: brick.position.z + dz } };
+    if (checkBounds(probe, brickType)) break;
+    if (!checkCollision(scene.bricks, probe, brickType)) return { suggestedZ: probe.position.z };
+  }
+  return {};
+}
+
 function checkSupport(_bricks: BrickInstance[], brick: BrickInstance, brickType: BrickDefinition): boolean {
   return grid.hasSupport(brick, brickType);
+}
+
+/**
+ * Find the highest Y where this brick's footprint would rest on existing support.
+ * Scans each XZ column in the brick's bottom footprint downward from just below
+ * the requested y. Returns max(top-of-highest-occupant) across columns, or 0.
+ */
+function findLandingY(brick: BrickInstance, brickType: BrickDefinition): number {
+  const bottomCells = computeBottomCells(brick, brickType);
+  let landingY = 0;
+  for (const c of bottomCells) {
+    for (let checkY = brick.position.y - 1; checkY >= 0; checkY--) {
+      if (grid.getOccupantAt(c.x, checkY, c.z)) {
+        if (checkY + 1 > landingY) landingY = checkY + 1;
+        break;
+      }
+    }
+  }
+  return landingY;
 }
 
 function findUnsupported(bricks: BrickInstance[]): string[] {
@@ -199,8 +293,8 @@ You only need to call brick_read_me once. Do NOT call it again — you will not 
 1. brick_read_me → Call once to learn the building format and rules (you just did this)
 2. brick_get_available → Returns a starter set of popular parts AND a category index of the full ${partsIndex.totalParts}-part library
    - brick_search_parts → Get any category or search by name. Results include dimensions (studsX, studsZ, heightUnits) so you can brick_place directly. Example: brick_search_parts({category: "Arch"}) returns all arches; brick_search_parts({query: "corner"}) finds corner parts across categories.
-3. brick_render_scene → Call BEFORE placing any bricks. This opens the 3D viewer for the user. If you skip this step, the user cannot see anything you build.
-4. brick_place → Now you can place bricks. Each brick appears live in the viewer as it's placed.
+3. brick_render_scene → Call BEFORE placing any bricks. Opens the 3D viewer. If you skip this step, the user cannot see anything you build.
+4. brick_place → Place one or many bricks via CSV (one row per brick). They stream into the viewer live, row by row, as the tool runs. Batch cap: ${MAX_BATCH_ROWS} rows / ${MAX_NEW_TYPES_PER_BATCH} new part types per call — for large builds, call it multiple times with chunks.
 5. brick_get_scene → Call anytime to inspect what's currently built
 6. brick_remove_brick → Remove a specific brick by ID (use brick_get_scene to find IDs). Also removes unsupported bricks above it.
 7. brick_clear_scene → Call to remove all bricks and start over
@@ -210,15 +304,37 @@ CRITICAL: You must call brick_render_scene before your first brick_place call. P
 ## Brick Types
 Any LDraw part number works as a typeId. brick_get_available gives you ~30 starters plus the full category index. brick_search_parts gives you any category or name match with dimensions included — use it whenever you want a shape that isn't in the starter set. Example: need an arch for a doorway → brick_search_parts({category: "Arch"}) → pick one → brick_place.
 
+## Beyond standard bricks — specialty parts
+
+The library has ${partsIndex.totalParts} parts across ${Object.keys(partsIndex.categories).length} categories.
+Beyond the basic bricks/plates/slopes, reach for brick_search_parts to get:
+
+| Category | Count | Use for |
+|---|---|---|
+| Arch | ~${partsIndex.categories['Arch']?.length ?? 0} | Doorways, bridges, curved openings |
+| Door | ~${partsIndex.categories['Door']?.length ?? 0} | Building facades, entrances |
+| Window | ~${partsIndex.categories['Window']?.length ?? 0} | Building facades, glazing |
+| Panel | ~${partsIndex.categories['Panel']?.length ?? 0} | Thin walls, greebling |
+| Fence | ~${partsIndex.categories['Fence']?.length ?? 0} | Railings, barriers |
+| Wheel | ~${partsIndex.categories['Wheel']?.length ?? 0} | Vehicles (see relaxed mode below) |
+| Tyre | ~${partsIndex.categories['Tyre']?.length ?? 0} | Vehicles (see relaxed mode below) |
+| Hinge | ~${partsIndex.categories['Hinge']?.length ?? 0} | Articulated joints |
+| Minifig | ~${partsIndex.categories['Minifig']?.length ?? 0} | Characters |
+| Minifig Accessory | ~${partsIndex.categories['Minifig Accessory']?.length ?? 0} | Held items, props |
+
+Example: brick_search_parts({category: "Arch"}) → returns all arches with dimensions ready for brick_place.
+
 ## Coordinate System
 - Baseplate: ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} studs on the X and Z axes
 - Y axis: height in plate units (1 standard brick = 3 Y units, 1 plate = 1 Y unit)
 - Valid ranges: X 0–${BASEPLATE_SIZE - 1}, Z 0–${BASEPLATE_SIZE - 1}, Y 0+
+- Compass: -X is East, +X is West, +Z is North, -Z is South. The viewer shows a 3D axes gizmo (bottom-right, red=X green=Y blue=Z) so the human can see which screen direction is which axis while orbiting.
 - Rotation: "0", "90", "180", or "270" (string)
-- Bricks CANNOT float — they must sit on the baseplate (Y=0) or on top of another brick
+- In strict mode (default), bricks CANNOT float — they must sit on the baseplate (Y=0) or on top of another brick. In relaxed mode, floating is allowed (see Build Modes).
 - ALL positions are relative to the baseplate. A brick's entire footprint (position + size) must stay within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. Out-of-bounds placements are rejected.
 - A brick at position (x, z) with studsX=2, studsZ=4 occupies x to x+2, z to z+4. So the maximum valid x for that brick is ${BASEPLATE_SIZE - 2}, and the maximum valid z is ${BASEPLATE_SIZE - 4}.
-- IMPORTANT: Every brick_place response includes a "footprint" showing the brick's exact occupied area: {minX, maxX, minZ, maxZ, topY}. Use footprint.maxX/maxZ to know where to place the NEXT brick adjacent to it. Use footprint.topY for the Y value of the next layer on top.
+- IMPORTANT: Every brick_place response includes a per-row "footprint" showing each brick's exact occupied area: {minX, maxX, minZ, maxZ, topY}. Use footprint.maxX/maxZ to know where to place the NEXT brick adjacent to it. Use footprint.topY for the Y value of the next layer on top.
+- You can batch many bricks in one brick_place call (one CSV row each). When tiling with a known dimension (e.g. 3001 is 2×4 → z advances by 4), compute the whole batch up front. When unsure of a part's footprint, place it alone first and read the response.
 - brick_get_scene also returns footprints for every brick. ALWAYS read footprints to position new bricks — never calculate positions from scratch when existing bricks have footprints.
 
 ## Size & Scale Reference
@@ -268,51 +384,111 @@ To place the next brick to the right: x=14 (footprint.maxX)
 To place a brick in front: z=12 (footprint.maxZ)
 To stack on top: y=3 (footprint.topY)
 
+## Orientation of asymmetric parts (slopes, wedges, arches)
+
+LDraw parts are rotated -90° around Y on load, so their native "front" (LDraw -Z) becomes our +X.
+At rotation=0, the studded/solid end of an asymmetric part sits at the LOW-X side of its footprint. The sloped/open/pointy feature faces +X.
+
+Our rotation is COUNTER-CLOCKWISE looking down (+Y view). Each +90 turns the feature from +X → +Z → -X → -Z → +X.
+
+| rotation | feature faces | studs at | top-down view (S=stud, /=slope) |
+|----------|---------------|----------|---------------------------------|
+| 0        | +X            | low-X    | S /   (slope on the +X side)    |
+| 90       | +Z            | low-Z    | S over /  (slope on the +Z side)|
+| 180      | -X            | high-X   | / S   (slope on the -X side)    |
+| 270      | -Z            | high-Z   | / over S  (slope on the -Z side)|
+
+CRITICAL: if your 0/180 slopes look right but your 90/270 slopes point the wrong way, you have them swapped — use 90 where you used 270 and vice versa. Our 90 is COUNTER-CLOCKWISE, not clockwise.
+
+### Roof peak — ridge runs along Z (slopes face each other across X)
+  brick_place(bricks="3039,10,3,10,0,#cc0000
+  3039,14,3,10,180,#cc0000")
+    # Slope at x=10 (rotation=0) faces +X. Slope at x=14 (rotation=180) faces -X. They meet at x=12.
+
+### Roof peak — ridge runs along X (slopes face each other across Z)
+  brick_place(bricks="3039,10,3,10,90,#cc0000
+  3039,10,3,14,270,#cc0000")
+    # Slope at z=10 (rotation=90) faces +Z. Slope at z=14 (rotation=270) faces -Z. They meet at z=12.
+
+### Four-sided pyramid roof (slopes on all sides facing INWARD)
+  # Building center at (x=15, z=15). Each slope faces TOWARD the center.
+  # East slope (low-X side, x=10): needs to face +X (toward center) → rotation=0
+  # West slope (high-X side, x=18): needs to face -X (toward center) → rotation=180
+  # South slope (low-Z side, z=10): needs to face +Z (toward center) → rotation=90
+  # North slope (high-Z side, z=18): needs to face -Z (toward center) → rotation=270
+
 ## Examples
 
-Each brick_place call places ONE brick. Build bottom-up — always place supports before the bricks on top.
+brick_place takes CSV: typeId,x,y,z,rotation,color — one brick per line. Rows are auto-sorted by Y ascending before placement, so you don't have to order supports first — but each brick still needs valid Y (on baseplate or resting on an existing brick).
 
-### Wall (4 bricks tall)
-Place first brick, then use footprint.topY for each subsequent layer:
-  brick_place(typeId="3008", x=10, y=0, z=10, color="#cc0000")   ← 3008 = Brick 1x8
-    → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:3}
-  brick_place(typeId="3008", x=10, y=3, z=10, color="#cc0000")   ← y=3 from topY
-    → footprint: {minX:10, maxX:11, minZ:10, maxZ:18, topY:6}
-  brick_place(typeId="3008", x=10, y=6, z=10, color="#cc0000")   ← y=6 from topY
-  brick_place(typeId="3008", x=10, y=9, z=10, color="#cc0000")   ← y=9 from topY
+### Single brick
+  brick_place(bricks="3001,10,0,10,0,#cc0000")
+    → results[0].footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
 
-### Placing side by side along Z
-Use footprint.maxZ from each response for the next brick's z:
-  brick_place(typeId="3001", x=10, y=0, z=10, color="#cc0000")   ← 3001 = Brick 2x4
-    → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
-  brick_place(typeId="3001", x=10, y=0, z=14, color="#0055bf")   ← z=14 from maxZ
-    → footprint: {minX:10, maxX:12, minZ:14, maxZ:18, topY:3}
-  brick_place(typeId="3001", x=10, y=0, z=18, color="#237841")   ← z=18 from maxZ
+### Wall (4 bricks tall, one call — streams into viewer row by row)
+3008 = Brick 1x8, heightUnits=3 → y advances by 3 per layer:
+  brick_place(bricks="3008,10,0,10,0,#cc0000
+  3008,10,3,10,0,#cc0000
+  3008,10,6,10,0,#cc0000
+  3008,10,9,10,0,#cc0000")
+    → results: [{row:1, ok:true, footprint:{...topY:3}}, {row:2, ok:true, footprint:{...topY:6}}, ...]
 
-### Placing side by side along X
-Use footprint.maxX from each response for the next brick's x:
-  brick_place(typeId="3001", x=10, y=0, z=10, color="#cc0000")   ← 3001 = Brick 2x4
-    → footprint: {minX:10, maxX:12, minZ:10, maxZ:14, topY:3}
-  brick_place(typeId="3001", x=12, y=0, z=10, color="#0055bf")   ← x=12 from maxX
-  brick_place(typeId="3001", x=14, y=0, z=10, color="#237841")   ← x=14 from maxX
+### Row along Z (one call)
+3001 = Brick 2x4, studsZ=4 → z advances by 4:
+  brick_place(bricks="3001,10,0,10,0,#cc0000
+  3001,10,0,14,0,#0055bf
+  3001,10,0,18,0,#237841")
+
+### Row along X (one call)
+3001 studsX=2 → x advances by 2:
+  brick_place(bricks="3001,10,0,10,0,#cc0000
+  3001,12,0,10,0,#0055bf
+  3001,14,0,10,0,#237841")
+
+### Unknown part dimensions → place one, read footprint, then batch
+  brick_place(bricks="3003,20,0,20")                      ← 3003 = ? place alone
+    → results[0].footprint: {minX:20, maxX:22, minZ:20, maxZ:22, topY:3}   (it's 2×2)
+  brick_place(bricks="3003,22,0,20\\n3003,24,0,20\\n3003,26,0,20")   ← now batch with x+=2
 
 ### Rotation changes footprint — always read it
   3001 (Brick 2x4) at rotation "0":  footprint maxX = x+2, maxZ = z+4
   3001 (Brick 2x4) at rotation "90": footprint maxX = x+4, maxZ = z+2  (swapped!)
 
+## Build modes
+
+- **strict** (default) — every brick needs support (y=0 or resting on a brick below). Removing a support cascades: everything above it that loses support is also removed. Use for structurally realistic builds.
+- **relaxed** — skips the support requirement. Floating bricks are allowed (placement still returns a \`warnings: ["floating"]\` hint). Removing a brick does NOT cascade. Use for staged assembly (place wheels before axles), specialty parts that attach via pins/clips, or freeform artistic builds.
+
+- **snap** (orthogonal flag) — when a brick lacks support, auto-correct its y to the nearest landing instead of rejecting. Works in both strict and relaxed mode. Result row includes \`snappedFrom:{y:originalY}\` and a warning. Turn on for layer-by-layer builds where you trust the server's landing math.
+
+Switch with: brick_set_build_mode({mode: "relaxed"})
+Set snap with: brick_set_build_mode({snap: true})
+Both can be set together: brick_set_build_mode({mode: "strict", snap: true})
+Check current mode: brick_get_scene includes \`buildMode\` and \`snap\` in the scene data.
+
+Typical workflow for vehicles:
+1. brick_set_build_mode({mode: "relaxed"})
+2. brick_search_parts({category: "Wheel"}) → find a wheel
+3. brick_place with wheels at the right height (they'll float until step 4)
+4. brick_place the chassis/axle bricks — wheels now visually connect
+5. brick_set_build_mode({mode: "strict"}) to resume normal building
+
 ## Rules
-- Build BOTTOM-UP: y=0 first, then y=3, y=6, etc. Floating bricks are rejected.
+- In strict mode (default), every brick needs support: y=0 (baseplate) OR resting on top of another brick. Floating bricks are rejected with a suggestedY hint. In relaxed mode, floating is allowed — see Build Modes above.
 - Use typeId values from brick_get_available for popular parts. You can also use any LDraw part number — the server will auto-detect dimensions from the LDraw library.
-- Each brick_place returns success with the brick ID, or an error explaining why it failed. Read the error and adjust.
+- brick_place returns {summary:{placed,failed,deferred?,totalBricks,hints?}, results:[...]}. Each row result is either {ok:true, id, footprint, snappedFrom?} or {ok:false, error, line, suggestedY?, suggestedX?, suggestedZ?, collidingWith?}. Rows are auto-sorted by Y before processing. If a row fails support, its error includes suggestedY — the nearest valid landing height. Retry that row with y=suggestedY (or enable snap mode to auto-land). If several rows fail, collect all of them, apply each hint, and resend them together in ONE follow-up call — don't retry one row at a time.
+- Collision errors include \`collidingWith: {id, typeId, footprint}\` — use footprint.maxX or footprint.maxZ to retry adjacent to the blocker. May also include \`suggestedX\` or \`suggestedZ\` (nearest open slot within 8 studs).
+- Bounds errors include \`suggestedX\`/\`suggestedZ\`/\`suggestedY\` — the nearest in-bounds position for this brick's actual footprint (rotation-aware).
+- Batch cap: max ${MAX_BATCH_ROWS} rows AND max ${MAX_NEW_TYPES_PER_BATCH} new part types per brick_place call. Rows beyond either cap are deferred — their error says "Batch cap reached" and summary.deferred counts them. Just resend those rows in the next brick_place call. Reusing a typeId already in the scene doesn't count toward the new-types cap.
 - Rotation swaps dimensions — account for this when tiling.
 - ALL bricks must fit within the ${BASEPLATE_SIZE}×${BASEPLATE_SIZE} baseplate. The brick's full footprint (position + studs size) must not exceed x=${BASEPLATE_SIZE - 1} or z=${BASEPLATE_SIZE - 1}. Out-of-bounds placements are rejected.
-- BEFORE placing a new brick, call brick_get_scene to see where existing bricks are. Position new bricks RELATIVE to what's already placed — adjacent to, on top of, or next to existing bricks. Never guess positions from scratch when there are already bricks in the scene.
+- Every successful row in brick_place results includes a footprint — use results[i].footprint.topY to position the next layer. You don't need brick_get_scene between your own brick_place calls; only call it at the START of a task to see what prior turns or the human placed.
 
 ## Building Strategy
-1. Call brick_get_scene FIRST to see what's already built. Always place new bricks relative to existing ones.
+1. Call brick_get_scene ONCE at the start to see what's already built. After that, track positions from the footprints in each brick_place results array.
 2. Plan the footprint first — lay the ground floor (Y=0)
 3. Build upward layer by layer — each layer's Y = previous Y + heightUnits
-4. Place one brick at a time. Read each response — if placement fails, adjust and retry.
+4. Send ~10 rows per brick_place call — one small section at a time. Never generate the whole build's CSV up front; plan the next section from the footprints returned in results. Rows are Y-sorted before processing so supports within a chunk land first.
 5. Alternate brick offsets between rows for realistic interlocking
 6. Use plates (heightUnits=1) for thin details, trim, and floors
 7. Use slopes for rooflines — studs are only on the flat side
@@ -339,6 +515,10 @@ Use footprint.maxX from each response for the next brick's x:
 // Module-level state ensures both sessions read/write the same scene.
 let scene: SceneData = { name: "Untitled", bricks: [] };
 
+type BuildMode = 'strict' | 'relaxed';
+let buildMode: BuildMode = 'strict';
+let snapY: boolean = false;
+
 export function createServer(): McpServer {
   const server = new McpServer({
     name: "Brick Builder",
@@ -363,6 +543,8 @@ export function createServer(): McpServer {
     return {
       scene: {
         ...scene,
+        buildMode,
+        snap: snapY,
         ...(dynamicTypes ? { dynamicTypes } : {}),
       },
       ...(message ? { message } : {}),
@@ -373,6 +555,26 @@ export function createServer(): McpServer {
     const payload = scenePayload(message);
     return {
       content: [{ type: "text" as const, text: JSON.stringify(payload) }],
+    };
+  }
+
+  function sceneWithFootprints() {
+    const bricksWithFootprints = scene.bricks.map(b => {
+      const bt = findBrickType(b.typeId);
+      if (!bt) return b;
+      const aabb = getBrickAABB(b, bt);
+      return {
+        ...b,
+        footprint: { minX: aabb.minX, maxX: aabb.maxX, minZ: aabb.minZ, maxZ: aabb.maxZ, topY: aabb.maxY },
+      };
+    });
+    const dynamicTypes = collectDynamicTypes();
+    return {
+      ...scene,
+      bricks: bricksWithFootprints,
+      buildMode,
+      snap: snapY,
+      ...(dynamicTypes ? { dynamicTypes } : {}),
     };
   }
 
@@ -651,7 +853,6 @@ export function createServer(): McpServer {
     {
       title: "Render Brick Scene",
       description: "Opens the 3D brick builder viewer. You MUST call this before brick_place so the user can see the bricks. Call brick_read_me first to learn the brick format.",
-      inputSchema: {},
       _meta: { ui: { resourceUri } },
     },
     async () => sceneResult("Scene rendered"),
@@ -662,69 +863,193 @@ export function createServer(): McpServer {
   server.registerTool(
     "brick_place",
     {
-      description: "Place a single brick. Returns the placed brick with its ID, or an error explaining why placement failed. Call brick_render_scene first to open the viewer.",
+      description: `Place one or more bricks. Input is CSV — one brick per line, columns: typeId,x,y,z,rotation,color. Rows are auto-sorted by Y ascending so supports always land before dependents (your CSV order need not be bottom-up). Batch cap: max ${MAX_BATCH_ROWS} rows AND max ${MAX_NEW_TYPES_PER_BATCH} new part types per call — rows beyond either cap are deferred with a clear error (resend them in a follow-up call). Returns a per-row result array: {ok:true, footprint, snappedFrom?} or {ok:false, error, suggestedY?|suggestedX?|suggestedZ?, collidingWith?}. Support failures include suggestedY (nearest valid landing). Collision failures include collidingWith (blocker brick + footprint) and suggestedX/Z (nearest open slot within 8 studs). Bounds failures include suggestedX/Z/Y clamped to valid range. Call brick_render_scene first to open the viewer. Keep batches small (~10 rows) — use the footprints in results to position your next call.`,
       inputSchema: {
-        typeId: z.string().describe("Brick type ID from brick_get_available or any LDraw part number"),
-        x: z.number().int().describe(`X position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-        y: z.number().int().min(0).describe("Y position in plate-height units (0 = baseplate, +3 per standard brick layer)"),
-        z: z.number().int().describe(`Z position in stud units (0 to ${BASEPLATE_SIZE - 1})`),
-        rotation: z.enum(["0", "90", "180", "270"]).optional().default("0").describe("Rotation degrees. Swaps X/Z dimensions: e.g. 3001 (Brick 2x4) at 90° occupies X=4, Z=2"),
-        color: z.string().optional().default("#cc0000").describe("Hex color"),
+        bricks: z.string().describe(
+          `CSV, one brick per line. Columns: typeId,x,y,z,rotation,color\n` +
+          `  typeId   LDraw part number (e.g. 3001 = Brick 2x4)\n` +
+          `  x,y,z    integers — x/z in studs (0..${BASEPLATE_SIZE - 1}), y in plate units (0 = baseplate, +3 per brick layer)\n` +
+          `  rotation 0|90|180|270 (optional, default 0)\n` +
+          `  color    hex (optional, default #cc0000)\n` +
+          `Single brick: one line. Multiple bricks: multiple lines. NO header row.\n` +
+          `Example:\n3001,10,0,10,0,#cc0000\n3001,10,0,14,0,#0055bf\n3001,10,3,12,0,#237841`
+        ),
       },
     },
-    async ({ typeId, x, y, z, rotation, color }) => {
-      const brickType = findBrickType(typeId);
-      if (!brickType) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: `Unknown brick type "${typeId}". Call brick_get_available to see valid type IDs, or use any valid LDraw part number.` }) }],
-          isError: true,
-        };
+    async ({ bricks }) => {
+      const lines = bricks.split("\n").map(l => l.trim()).filter(l => l && !l.startsWith("#"));
+      if (lines.length === 0) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "No brick rows found in CSV input" }) }], isError: true };
       }
-      const instance: BrickInstance = {
-        id: generateId(),
-        typeId,
-        position: { x, y, z },
-        rotation: Number(rotation ?? "0") as 0 | 90 | 180 | 270,
-        color: color ?? "#cc0000",
-      };
-      const boundsError = checkBounds(instance, brickType);
-      if (boundsError) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: boundsError, position: { x, y, z }, typeId }) }],
-          isError: true,
-        };
+
+      type Footprint = { minX: number; maxX: number; minZ: number; maxZ: number; topY: number };
+      type RowResult =
+        | { row: number; ok: true; id: string; typeId: string; position: { x: number; y: number; z: number }; rotation: number; color: string; footprint: Footprint; warnings?: string[]; snappedFrom?: { y: number } }
+        | { row: number; ok: false; error: string; line: string; suggestedY?: number; suggestedX?: number; suggestedZ?: number; collidingWith?: { id: string; typeId: string; footprint: Footprint }; snappedFrom?: { y: number } };
+      const results: RowResult[] = [];
+      const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
+      // Pass 1: parse all rows. Hold parse errors aside; collect valid candidates for Y-sort.
+      type ParsedRow = { row: number; line: string; instance: BrickInstance; brickType: BrickDefinition };
+      const parseErrors: RowResult[] = [];
+      const candidates: ParsedRow[] = [];
+
+      for (let i = 0; i < lines.length; i++) {
+        const cols = lines[i].split(",").map(c => c.trim());
+        const [typeId, xs, ys, zs, rot, col] = cols;
+        const x = parseInt(xs, 10), y = parseInt(ys, 10), z = parseInt(zs, 10);
+        const rotation = (rot || "0") as "0" | "90" | "180" | "270";
+        const color = col || "#cc0000";
+
+        if (!typeId || !Number.isInteger(x) || !Number.isInteger(y) || !Number.isInteger(z)) {
+          parseErrors.push({ row: i + 1, ok: false, error: "Malformed row — need typeId,x,y,z[,rotation,color]", line: lines[i] });
+          continue;
+        }
+        if (!["0", "90", "180", "270"].includes(rotation)) {
+          parseErrors.push({ row: i + 1, ok: false, error: `Invalid rotation "${rot}" — must be 0|90|180|270`, line: lines[i] });
+          continue;
+        }
+        const brickType = findBrickType(typeId);
+        if (!brickType) {
+          parseErrors.push({ row: i + 1, ok: false, error: `Unknown brick type "${typeId}"`, line: lines[i] });
+          continue;
+        }
+        candidates.push({
+          row: i + 1, line: lines[i], brickType,
+          instance: {
+            id: generateId(), typeId, position: { x, y, z },
+            rotation: Number(rotation) as 0 | 90 | 180 | 270, color,
+          },
+        });
       }
-      if (!checkSupport(scene.bricks, instance, brickType)) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: "No support — brick must be on baseplate (y=0) or resting on top of another brick", position: { x, y, z }, typeId }) }],
-          isError: true,
-        };
+
+      // Pass 2: stable-sort candidates by Y so supports land before dependents.
+      // Row indices in results still refer to the original CSV order.
+      candidates.sort((a, b) => a.instance.position.y - b.instance.position.y);
+
+      // Track types already in the scene so the new-type cap only counts
+      // genuinely novel geometry the client will need to fetch.
+      const existingTypes = new Set(scene.bricks.map(b => b.typeId));
+      const newTypesThisBatch = new Set<string>();
+
+      let collisionRow: number | null = null;
+      let supportFailures = 0;
+      let rowsProcessed = 0;
+      let capped = false;
+      const deferredRows: number[] = [];
+
+      for (const cand of candidates) {
+        const { instance, brickType, row, line } = cand;
+        const { y } = instance.position;
+        const { typeId } = instance;
+
+        // Cap check — applies before validation so deferred rows are known-good
+        // parse-wise and can be replayed verbatim in a follow-up call.
+        const wouldAddNewType = !existingTypes.has(typeId) && !newTypesThisBatch.has(typeId);
+        if (rowsProcessed >= MAX_BATCH_ROWS ||
+            (wouldAddNewType && newTypesThisBatch.size >= MAX_NEW_TYPES_PER_BATCH)) {
+          capped = true;
+          deferredRows.push(row);
+          results.push({
+            row, ok: false, line,
+            error: `Batch cap reached (max ${MAX_BATCH_ROWS} rows, max ${MAX_NEW_TYPES_PER_BATCH} new part types per call). Place this row in a follow-up brick_place call.`,
+          });
+          continue;
+        }
+
+        const boundsErr = checkBounds(instance, brickType);
+        if (boundsErr) {
+          results.push({
+            row, ok: false, error: boundsErr.error, line,
+            ...(boundsErr.suggestedX !== undefined ? { suggestedX: boundsErr.suggestedX } : {}),
+            ...(boundsErr.suggestedZ !== undefined ? { suggestedZ: boundsErr.suggestedZ } : {}),
+            ...(boundsErr.suggestedY !== undefined ? { suggestedY: boundsErr.suggestedY } : {}),
+          });
+          continue;
+        }
+        const rowWarnings: string[] = [];
+        let snappedFrom: { y: number } | undefined;
+        if (!checkSupport(scene.bricks, instance, brickType)) {
+          const landingY = findLandingY(instance, brickType);
+          if (buildMode === 'relaxed') {
+            rowWarnings.push(`floating — no support at y=${y}, nearest landing y=${landingY}`);
+          } else if (snapY) {
+            snappedFrom = { y };
+            instance.position.y = landingY;
+            rowWarnings.push(`y auto-snapped ${y}→${landingY}`);
+          } else {
+            supportFailures++;
+            results.push({
+              row, ok: false, line, suggestedY: landingY,
+              error: `No support at y=${y} — nearest landing is y=${landingY} (use footprint.topY from the brick below)`,
+            });
+            continue;
+          }
+        }
+        if (checkCollision(scene.bricks, instance, brickType)) {
+          if (collisionRow === null) collisionRow = row;
+          const blocker = findCollisionBlocker(instance, brickType);
+          const scan = scanForOpenSlot(instance, brickType);
+          const blockerDesc = blocker
+            ? ` — overlaps brick ${blocker.id} (${blocker.typeId}) at footprint {minX:${blocker.footprint.minX},maxX:${blocker.footprint.maxX},minZ:${blocker.footprint.minZ},maxZ:${blocker.footprint.maxZ},topY:${blocker.footprint.topY}}`
+            : " — overlaps an existing brick";
+          results.push({
+            row, ok: false, line,
+            error: `Collision${blockerDesc}`,
+            ...(blocker ? { collidingWith: blocker } : {}),
+            ...(scan.suggestedX !== undefined ? { suggestedX: scan.suggestedX } : {}),
+            ...(scan.suggestedZ !== undefined ? { suggestedZ: scan.suggestedZ } : {}),
+            ...(snappedFrom ? { snappedFrom, suggestedY: instance.position.y } : {}),
+          });
+          continue;
+        }
+
+        scene.bricks.push(instance);
+        grid.place(instance.id, computeOccupiedCells(instance, brickType));
+        rowsProcessed++;
+        if (wouldAddNewType) newTypesThisBatch.add(typeId);
+
+        const aabb = getBrickAABB(instance, brickType);
+        results.push({
+          row, ok: true, id: instance.id, typeId: instance.typeId,
+          position: { ...instance.position }, rotation: instance.rotation, color: instance.color,
+          footprint: { minX: aabb.minX, maxX: aabb.maxX, minZ: aabb.minZ, maxZ: aabb.maxZ, topY: aabb.maxY },
+          ...(rowWarnings.length > 0 ? { warnings: rowWarnings } : {}),
+          ...(snappedFrom ? { snappedFrom } : {}),
+        });
+
+        // Yield to event loop so the widget's 1s poll sees bricks land progressively.
+        if (candidates.length > 1) await sleep(60);
       }
-      if (checkCollision(scene.bricks, instance, brickType)) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({ error: "Collision — overlaps an existing brick", position: { x, y, z }, typeId }) }],
-          isError: true,
-        };
+
+      results.push(...parseErrors);
+      results.sort((a, b) => a.row - b.row);
+
+      const placed = results.filter(r => r.ok).length;
+      const failed = results.length - placed;
+
+      const hints: string[] = [];
+      if (capped) {
+        deferredRows.sort((a, b) => a - b);
+        hints.push(`${deferredRows.length} row(s) deferred to stay under batch limits. Resend those rows in a follow-up brick_place call — they are otherwise valid. Deferred rows: ${deferredRows.join(",")}`);
       }
-      scene.bricks.push(instance);
-      grid.place(instance.id, computeOccupiedCells(instance, brickType));
-      const aabb = getBrickAABB(instance, brickType);
+      if (supportFailures > 0 && collisionRow !== null) {
+        hints.push(`Row ${collisionRow} collided — if it was a support brick, rows above it will fail with "no support". Fix the collision first.`);
+      }
+      if (supportFailures > 1 && collisionRow === null) {
+        hints.push(`${supportFailures} rows failed support. Use footprint.topY from the brick below as the next layer's y — don't assume fixed offsets.`);
+      }
+
       return {
         content: [{ type: "text" as const, text: JSON.stringify({
-          placed: {
-            id: instance.id,
-            typeId,
-            position: { x, y, z },
-            rotation: instance.rotation,
-            color: instance.color,
-            footprint: {
-              minX: aabb.minX, maxX: aabb.maxX,
-              minZ: aabb.minZ, maxZ: aabb.maxZ,
-              topY: aabb.maxY,
-            },
+          summary: {
+            placed, failed, totalBricks: scene.bricks.length,
+            ...(capped ? { deferred: deferredRows.length } : {}),
+            ...(hints.length > 0 ? { hints } : {}),
           },
-          totalBricks: scene.bricks.length,
+          results,
         }) }],
+        isError: placed === 0 && failed > 0,
       };
     },
   );
@@ -734,34 +1059,12 @@ export function createServer(): McpServer {
   server.registerTool(
     "brick_get_scene",
     {
-      description: "Returns the current scene state with all placed bricks and their footprints. Use this before placing new bricks to see where existing bricks are.",
+      description: "Returns the current scene state with all placed bricks and their footprints. Call this ONCE at the start of a building task — between your own brick_place calls, use the footprints in results instead.",
       annotations: { readOnlyHint: true },
     },
-    async () => {
-      const bricksWithFootprints = scene.bricks.map(b => {
-        const bt = findBrickType(b.typeId);
-        if (!bt) return b;
-        const aabb = getBrickAABB(b, bt);
-        return {
-          ...b,
-          footprint: {
-            minX: aabb.minX, maxX: aabb.maxX,
-            minZ: aabb.minZ, maxZ: aabb.maxZ,
-            topY: aabb.maxY,
-          },
-        };
-      });
-      const dynamicTypes = collectDynamicTypes();
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify({
-          scene: {
-            ...scene,
-            bricks: bricksWithFootprints,
-            ...(dynamicTypes ? { dynamicTypes } : {}),
-          },
-        }) }],
-      };
-    },
+    async () => ({
+      content: [{ type: "text" as const, text: JSON.stringify({ scene: sceneWithFootprints() }) }],
+    }),
   );
 
   // ── Tool 6: brick_clear_scene (model-facing, no UI metadata) ──────────
@@ -802,17 +1105,19 @@ export function createServer(): McpServer {
       const removed = scene.bricks[idx];
       grid.remove(removed.id);
       scene.bricks.splice(idx, 1);
-      // Cascade: remove any bricks left unsupported
+      // Cascade: remove any bricks left unsupported (strict mode only)
       let cascadeCount = 0;
-      let changed = true;
-      while (changed) {
-        changed = false;
-        const unsupported = findUnsupported(scene.bricks);
-        if (unsupported.length > 0) {
-          for (const uid of unsupported) grid.remove(uid);
-          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
-          cascadeCount += unsupported.length;
-          changed = true;
+      if (buildMode === 'strict') {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          const unsupported = findUnsupported(scene.bricks);
+          if (unsupported.length > 0) {
+            for (const uid of unsupported) grid.remove(uid);
+            scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+            cascadeCount += unsupported.length;
+            changed = true;
+          }
         }
       }
       const msg = `Removed ${removed.typeId} from (${removed.position.x}, ${removed.position.y}, ${removed.position.z})` +
@@ -823,6 +1128,52 @@ export function createServer(): McpServer {
           cascadeRemoved: cascadeCount,
           totalBricks: scene.bricks.length,
           message: msg,
+        }) }],
+      };
+    },
+  );
+
+  // ── Tool 7b: brick_set_build_mode (model-facing, no UI metadata) ───────
+
+  server.registerTool(
+    "brick_set_build_mode",
+    {
+      description: "Set the build mode and/or snap flag. 'strict' (default): bricks need support, removing a support cascades deletions. 'relaxed': floating bricks allowed (placement returns a warnings hint), no cascade on remove/move/rotate. 'snap': orthogonal flag — when a brick lacks support, auto-correct its y to the nearest landing instead of rejecting. Both fields are optional; either can be set independently.",
+      inputSchema: {
+        mode: z.enum(["strict", "relaxed"]).optional().describe("Build mode: 'strict' enforces support + cascades, 'relaxed' allows floating bricks and skips cascade deletion."),
+        snap: z.boolean().optional().describe(
+          "Auto-correct Y to nearest supported landing when a brick would otherwise float. " +
+          "Placement succeeds with {snappedFrom:{y:originalY}} in the result. " +
+          "If the landed Y also collides, the row fails with a collision error at the landed Y."
+        ),
+      },
+    },
+    async ({ mode, snap }) => {
+      const previousMode = buildMode;
+      const previousSnap = snapY;
+      if (mode !== undefined) buildMode = mode;
+      if (snap !== undefined) snapY = snap;
+      const parts: string[] = [];
+      if (mode !== undefined) parts.push(`mode='${buildMode}' (was '${previousMode}')`);
+      if (snap !== undefined) parts.push(`snap=${snapY} (was ${previousSnap})`);
+      if (parts.length === 0) parts.push(`mode='${buildMode}', snap=${snapY} (no changes)`);
+      let message = `Build settings: ${parts.join(", ")}. Scene has ${scene.bricks.length} brick(s).`;
+      let floatingCount = 0;
+      if (mode === 'strict' && scene.bricks.length > 0) {
+        floatingCount = findUnsupported(scene.bricks).length;
+        if (floatingCount > 0) {
+          message += ` ${floatingCount} floating brick(s) remain — they will not be removed but new placements will require support.`;
+        }
+      }
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify({
+          mode: buildMode,
+          snap: snapY,
+          ...(mode !== undefined ? { previousMode } : {}),
+          ...(snap !== undefined ? { previousSnap } : {}),
+          totalBricks: scene.bricks.length,
+          ...(floatingCount > 0 ? { floatingBricks: floatingCount } : {}),
+          message,
         }) }],
       };
     },
@@ -905,9 +1256,9 @@ export function createServer(): McpServer {
         rotation: Number(rotation) as 0 | 90 | 180 | 270,
         color: color ?? "#cc0000",
       };
-      const boundsError = checkBounds(instance, brickType);
-      if (boundsError) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): ${boundsError}` }) }], isError: true };
+      const boundsErr = checkBounds(instance, brickType);
+      if (boundsErr) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): ${boundsErr.error}` }) }], isError: true };
       }
       if (!checkSupport(scene.bricks, instance, brickType)) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `${typeId} at (${x},${y},${z}): no support — must be on baseplate (Y=0) or resting on top of another brick` }) }], isError: true };
@@ -942,17 +1293,19 @@ export function createServer(): McpServer {
       const removed = scene.bricks[idx];
       grid.remove(removed.id);
       scene.bricks.splice(idx, 1);
-      // Cascade: remove any bricks left unsupported
+      // Cascade: remove any bricks left unsupported (strict mode only)
       let cascadeCount = 0;
-      let changed = true;
-      while (changed) {
-        changed = false;
-        const unsupported = findUnsupported(scene.bricks);
-        if (unsupported.length > 0) {
-          for (const uid of unsupported) grid.remove(uid);
-          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
-          cascadeCount += unsupported.length;
-          changed = true;
+      if (buildMode === 'strict') {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          const unsupported = findUnsupported(scene.bricks);
+          if (unsupported.length > 0) {
+            for (const uid of unsupported) grid.remove(uid);
+            scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+            cascadeCount += unsupported.length;
+            changed = true;
+          }
         }
       }
 
@@ -988,9 +1341,9 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Invalid brick type "${brick.typeId}" on brick ${brickId}.` }) }], isError: true };
       }
       const moved: BrickInstance = { ...brick, position: { x, y, z } };
-      const boundsError = checkBounds(moved, brickType);
-      if (boundsError) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): ${boundsError}` }) }], isError: true };
+      const boundsErr = checkBounds(moved, brickType);
+      if (boundsErr) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot move ${brick.typeId} to (${x},${y},${z}): ${boundsErr.error}` }) }], isError: true };
       }
       // Temporarily remove from grid to check support/collision at new position
       grid.remove(brickId);
@@ -1005,17 +1358,19 @@ export function createServer(): McpServer {
       const oldPos = { ...brick.position };
       brick.position = { x, y, z };
       grid.place(brickId, computeOccupiedCells(brick, brickType));
-      // Cascade: remove any bricks left unsupported by this move
+      // Cascade: remove any bricks left unsupported by this move (strict mode only)
       let cascadeCount = 0;
-      let changed = true;
-      while (changed) {
-        changed = false;
-        const unsupported = findUnsupported(scene.bricks);
-        if (unsupported.length > 0) {
-          for (const uid of unsupported) grid.remove(uid);
-          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
-          cascadeCount += unsupported.length;
-          changed = true;
+      if (buildMode === 'strict') {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          const unsupported = findUnsupported(scene.bricks);
+          if (unsupported.length > 0) {
+            for (const uid of unsupported) grid.remove(uid);
+            scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+            cascadeCount += unsupported.length;
+            changed = true;
+          }
         }
       }
 
@@ -1049,9 +1404,9 @@ export function createServer(): McpServer {
         return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Invalid brick type "${brick.typeId}" on brick ${brickId}.` }) }], isError: true };
       }
       const rotated: BrickInstance = { ...brick, rotation: Number(rotation) as 0 | 90 | 180 | 270 };
-      const boundsError = checkBounds(rotated, brickType);
-      if (boundsError) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: ${boundsError}` }) }], isError: true };
+      const boundsErr = checkBounds(rotated, brickType);
+      if (boundsErr) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({ error: `Cannot rotate ${brick.typeId} at (${brick.position.x},${brick.position.y},${brick.position.z}) to ${rotation}°: ${boundsErr.error}` }) }], isError: true };
       }
       // Temporarily remove from grid to check support/collision with new rotation
       grid.remove(brickId);
@@ -1066,17 +1421,19 @@ export function createServer(): McpServer {
       }
       brick.rotation = Number(rotation) as 0 | 90 | 180 | 270;
       grid.place(brickId, computeOccupiedCells(brick, brickType));
-      // Cascade: remove any bricks left unsupported by the footprint change
+      // Cascade: remove any bricks left unsupported by the footprint change (strict mode only)
       let cascadeCount = 0;
-      let changed = true;
-      while (changed) {
-        changed = false;
-        const unsupported = findUnsupported(scene.bricks);
-        if (unsupported.length > 0) {
-          for (const uid of unsupported) grid.remove(uid);
-          scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
-          cascadeCount += unsupported.length;
-          changed = true;
+      if (buildMode === 'strict') {
+        let changed = true;
+        while (changed) {
+          changed = false;
+          const unsupported = findUnsupported(scene.bricks);
+          if (unsupported.length > 0) {
+            for (const uid of unsupported) grid.remove(uid);
+            scene.bricks = scene.bricks.filter(b => !unsupported.includes(b.id));
+            cascadeCount += unsupported.length;
+            changed = true;
+          }
         }
       }
 
@@ -1170,7 +1527,7 @@ export function createServer(): McpServer {
           const bt = findBrickType(brick.typeId);
           if (!bt) { dropped++; continue; }
           if (checkBounds(brick, bt)) { dropped++; continue; }
-          if (!checkSupport(valid, brick, bt)) { dropped++; continue; }
+          if (buildMode === 'strict' && !checkSupport(valid, brick, bt)) { dropped++; continue; }
           if (checkCollision(valid, brick, bt)) { dropped++; continue; }
           valid.push(brick);
           grid.place(brick.id, computeOccupiedCells(brick, bt));

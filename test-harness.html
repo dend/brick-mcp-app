@@ -248,6 +248,7 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.setClearColor(0x0a0a0a);
+renderer.autoClear = false;
 viewport.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -316,6 +317,57 @@ scene.add(groundPlane);
 const brickGroup = new THREE.Group();
 scene.add(brickGroup);
 const brickMeshMap = new Map(); // id -> mesh/group
+
+// ── Axes Gizmo (bottom-right orientation HUD) ───────────────────────────────
+const GIZMO_SIZE = 150, GIZMO_MARGIN = 8;
+const gizmoScene = new THREE.Scene();
+const gizmoCam = new THREE.OrthographicCamera(-1.4, 1.4, 1.4, -1.4, 0.1, 10);
+const gizmoTmp = new THREE.Vector3();
+function gizmoLabel(primary, secondary, color, x, y, z) {
+  const compass = secondary !== null;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  ctx.beginPath(); ctx.arc(64, 64, 56, 0, Math.PI * 2);
+  if (compass) { ctx.fillStyle = color; ctx.fill(); }
+  else { ctx.strokeStyle = color; ctx.lineWidth = 6; ctx.stroke(); }
+  ctx.fillStyle = compass ? '#fff' : color;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold 60px sans-serif'; ctx.fillText(primary, 64, compass ? 48 : 64);
+  if (secondary) { ctx.font = '30px sans-serif'; ctx.fillText(secondary, 64, 92); }
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv) }));
+  s.scale.set(0.55, 0.55, 1); s.position.set(x, y, z);
+  gizmoScene.add(s);
+}
+function gizmoArm(axis, color) {
+  const g = new THREE.CylinderGeometry(0.02, 0.02, 0.8, 8);
+  if (axis === 'x') g.rotateZ(-Math.PI / 2);
+  if (axis === 'z') g.rotateX(Math.PI / 2);
+  g.translate(axis === 'x' ? 0.4 : 0, axis === 'y' ? 0.4 : 0, axis === 'z' ? 0.4 : 0);
+  gizmoScene.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color })));
+}
+{
+  const backdrop = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 32, 16),
+    new THREE.MeshBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.25, side: THREE.BackSide, depthWrite: false }),
+  );
+  backdrop.renderOrder = -1;
+  const gridPts = [];
+  const gN = 48;
+  const gRing = (fn) => { for (let i = 0; i < gN; i++) { const a = i/gN*Math.PI*2, b = (i+1)/gN*Math.PI*2; gridPts.push(...fn(a), ...fn(b)); } };
+  for (const y of [-0.5, 0, 0.5]) { const r = Math.sqrt(1 - y*y); gRing(t => [r*Math.cos(t), y, r*Math.sin(t)]); }
+  for (let k = 0; k < 4; k++) { const p = k*Math.PI/4; gRing(t => [Math.cos(t)*Math.cos(p), Math.sin(t), Math.cos(t)*Math.sin(p)]); }
+  const gridGeo = new THREE.BufferGeometry();
+  gridGeo.setAttribute('position', new THREE.Float32BufferAttribute(gridPts, 3));
+  const grid = new THREE.LineSegments(gridGeo, new THREE.LineBasicMaterial({ color: 0xaaaaaa, transparent: true, opacity: 0.25, depthWrite: false }));
+  grid.renderOrder = -1;
+  gizmoScene.add(backdrop, grid);
+}
+gizmoArm('x', '#e74c3c'); gizmoArm('y', '#2ecc71'); gizmoArm('z', '#3498db');
+gizmoLabel('W', '+X', '#e74c3c',  1, 0, 0);
+gizmoLabel('E', '-X', '#e74c3c', -1, 0, 0);
+gizmoLabel('Y', null, '#2ecc71',  0, 1, 0);
+gizmoLabel('N', '+Z', '#3498db',  0, 0, 1);
+gizmoLabel('S', '-Z', '#3498db',  0, 0, -1);
 
 // ── LDraw Part Loading ──────────────────────────────────────────────────────
 const LDRAW_SCALE = 0.05;
@@ -546,12 +598,13 @@ function reconcileScene(bricks) {
 }
 
 // Resize
+let viewW = 1, viewH = 1;
 function onResize() {
-  const w = viewport.clientWidth;
-  const h = viewport.clientHeight;
-  camera.aspect = w / h;
+  viewW = viewport.clientWidth;
+  viewH = viewport.clientHeight;
+  camera.aspect = viewW / viewH;
   camera.updateProjectionMatrix();
-  renderer.setSize(w, h);
+  renderer.setSize(viewW, viewH);
 }
 window.addEventListener('resize', onResize);
 onResize();
@@ -560,7 +613,15 @@ onResize();
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
+  renderer.setViewport(0, 0, viewW, viewH);
+  renderer.clear();
   renderer.render(scene, camera);
+  gizmoCam.quaternion.copy(camera.quaternion);
+  gizmoTmp.set(0, 0, 2).applyQuaternion(camera.quaternion);
+  gizmoCam.position.copy(gizmoTmp);
+  renderer.clearDepth();
+  renderer.setViewport(viewW - GIZMO_SIZE - GIZMO_MARGIN, GIZMO_MARGIN, GIZMO_SIZE, GIZMO_SIZE);
+  renderer.render(gizmoScene, gizmoCam);
 }
 animate();
 
