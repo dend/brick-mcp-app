@@ -23,6 +23,10 @@ interface PartEntry {
 
 function main() {
   if (!fs.existsSync(PARTS_DIR)) {
+    if (fs.existsSync(OUTPUT_FILE)) {
+      console.log(`LDraw parts directory not found — using committed ${path.basename(OUTPUT_FILE)}`);
+      process.exit(0);
+    }
     console.error(`LDraw parts directory not found: ${PARTS_DIR}`);
     console.error("Run 'npm run download:ldraw' first.");
     process.exit(1);
