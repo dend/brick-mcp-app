@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/dend-brick-mcp-app-badge.png)](https://mseep.ai/app/dend-brick-mcp-app)
+
 <div align="center">
   <h1>Brick Builder MCP App</h1>
   <p>
